@@ -1,0 +1,143 @@
+/* === Org Directory Plugin Styles === */
+
+.org-directory-sidebar {
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.org-directory-header {
+    color: var(--center-channel-text, #3d3c40);
+}
+
+/* Search */
+.org-directory-search-bar {
+    position: relative;
+}
+
+.org-directory-search-input {
+    background: var(--center-channel-bg, #fff);
+    color: var(--center-channel-text, #3d3c40);
+    border: 1px solid rgba(var(--center-channel-text-rgb, 63, 67, 80), 0.2) !important;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.org-directory-search-input:focus {
+    border-color: var(--button-bg, #1c58d9) !important;
+    box-shadow: 0 0 0 2px rgba(28, 88, 217, 0.15);
+}
+
+/* Tree */
+.org-directory-tree-node {
+    border-radius: 4px;
+}
+
+.org-directory-node-row {
+    transition: background 0.1s;
+}
+
+.org-directory-node-row:hover {
+    background: rgba(var(--center-channel-text-rgb, 63, 67, 80), 0.08);
+}
+
+.org-directory-node-actions {
+    visibility: hidden;
+}
+
+.org-directory-node-row:hover .org-directory-node-actions {
+    visibility: visible;
+}
+
+/* Loading spinner for node expansion */
+.org-directory-node-loading {
+    display: inline-block;
+    animation: org-directory-spin 0.8s linear infinite;
+    color: var(--button-bg, #1c58d9);
+}
+
+@keyframes org-directory-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* User leaf */
+.org-directory-user-leaf {
+    transition: background 0.1s;
+    border-radius: 4px;
+}
+
+.org-directory-user-leaf:hover {
+    background: rgba(var(--center-channel-text-rgb, 63, 67, 80), 0.06);
+}
+
+/* Search results */
+.org-directory-search-result-item:hover {
+    background: rgba(var(--center-channel-text-rgb, 63, 67, 80), 0.06);
+}
+
+/* Loading */
+.org-directory-loading {
+    color: var(--center-channel-text, #3d3c40);
+    opacity: 0.5;
+}
+
+/* User detail panel */
+.org-directory-user-detail-panel {
+    position: absolute;
+    inset: 0;
+    background: var(--center-channel-bg, #fff);
+    padding: 12px;
+    box-sizing: border-box;
+    overflow-y: auto;
+    z-index: 10;
+}
+
+.org-directory-user-detail-header {
+    color: var(--center-channel-text, #3d3c40);
+}
+
+.org-directory-back-btn:hover {
+    opacity: 0.7;
+}
+
+.org-directory-user-detail-info {
+    color: var(--center-channel-text, #3d3c40);
+}
+
+.org-directory-btn-primary:hover {
+    opacity: 0.85;
+}
+
+/* Tree children expand animation */
+.org-directory-tree-children {
+    animation: org-directory-expand 0.12s ease-out;
+}
+
+@keyframes org-directory-expand {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* User leaf keyboard focus */
+.org-directory-user-leaf:focus {
+    outline: 2px solid var(--button-bg, #1c58d9);
+    outline-offset: -1px;
+    border-radius: 4px;
+}
+
+/* Error banner */
+.org-directory-error-banner {
+    background: rgba(247, 67, 67, 0.1);
+    border: 1px solid rgba(247, 67, 67, 0.3);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #f74343;
+    margin-bottom: 8px;
+}

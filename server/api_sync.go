@@ -1,0 +1,462 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/gorilla/mux"
+	mmmodel "github.com/mattermost/mattermost/server/public/model"
+
+	pluginmodel "github.com/your-org/mattermost-plugin-org-directory/server/model"
+)
+
+// handleSyncData handles POST /api/v1/sync — full or incremental sync of nodes+members.
+func (p *Plugin) handleSyncData(w http.ResponseWriter, r *http.Request) {
+	var req pluginmodel.SyncRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Source == "" {
+		writeError(w, http.StatusBadRequest, "source is required")
+		return
+	}
+
+	resp := p.executeSyncRequest(&req)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSyncNodes handles POST /api/v1/sync/nodes — sync only nodes.
+func (p *Plugin) handleSyncNodes(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Source   string                        `json:"source"`
+		SyncType string                        `json:"sync_type"`
+		Nodes    []pluginmodel.SyncNodePayload `json:"nodes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Source == "" {
+		writeError(w, http.StatusBadRequest, "source is required")
+		return
+	}
+
+	syncReq := &pluginmodel.SyncRequest{
+		Source:   req.Source,
+		SyncType: req.SyncType,
+		Nodes:    req.Nodes,
+	}
+	resp := p.executeSyncRequest(syncReq)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSyncMembers handles POST /api/v1/sync/members — sync only members.
+func (p *Plugin) handleSyncMembers(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Source   string                          `json:"source"`
+		SyncType string                          `json:"sync_type"`
+		Members  []pluginmodel.SyncMemberPayload `json:"members"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Source == "" {
+		writeError(w, http.StatusBadRequest, "source is required")
+		return
+	}
+
+	syncReq := &pluginmodel.SyncRequest{
+		Source:   req.Source,
+		SyncType: req.SyncType,
+		Members:  req.Members,
+	}
+	resp := p.executeSyncRequest(syncReq)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSyncUserMappings handles POST /api/v1/sync/user-mappings.
+func (p *Plugin) handleSyncUserMappings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Source   string                    `json:"source"`
+		Mappings []pluginmodel.UserMapping `json:"mappings"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	created := 0
+	updated := 0
+	for _, m := range req.Mappings {
+		m.Source = req.Source
+		_, err := p.store.UpsertUserMapping(&m)
+		if err != nil {
+			p.API.LogError("failed to upsert user mapping", "err", err)
+			continue
+		}
+		if m.CreateAt == 0 {
+			updated++
+		} else {
+			created++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int{
+		"created": created,
+		"updated": updated,
+	})
+}
+
+// handleGetUserMappings handles GET /api/v1/sync/user-mappings/{source}.
+func (p *Plugin) handleGetUserMappings(w http.ResponseWriter, r *http.Request) {
+	source := mux.Vars(r)["source"]
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if perPage <= 0 {
+		perPage = 50
+	}
+
+	mappings, err := p.store.GetUserMappingsBySource(source, page, perPage)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get mappings")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, mappings)
+}
+
+// handleGetSyncLogs handles GET /api/v1/sync/logs or /api/v1/admin/sync/logs.
+func (p *Plugin) handleGetSyncLogs(w http.ResponseWriter, r *http.Request) {
+	source := r.URL.Query().Get("source")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if perPage <= 0 {
+		perPage = 20
+	}
+
+	logs, err := p.store.GetSyncLogs(source, page, perPage)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get sync logs")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, logs)
+}
+
+// handleGetSyncLog handles GET /api/v1/sync/logs/{id} or /api/v1/admin/sync/logs/{id}.
+func (p *Plugin) handleGetSyncLog(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	log, err := p.store.GetSyncLog(id)
+	if err != nil || log == nil {
+		writeError(w, http.StatusNotFound, "sync log not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, log)
+}
+
+// executeSyncRequest runs a full or incremental sync and returns the response.
+func (p *Plugin) executeSyncRequest(req *pluginmodel.SyncRequest) *pluginmodel.SyncResponse {
+	resp := &pluginmodel.SyncResponse{}
+
+	// Create sync log
+	syncLog := &pluginmodel.SyncLog{
+		Source:    req.Source,
+		SyncType:  req.SyncType,
+		Status:    "running",
+		StartedAt: mmmodel.GetMillis(),
+		Details:   "{}",
+	}
+	if created, err := p.store.CreateSyncLog(syncLog); err == nil {
+		syncLog = created
+		resp.SyncLogID = syncLog.ID
+	}
+
+	// Topologically sort nodes (parents before children)
+	sortedNodes := topologicalSortNodes(req.Nodes)
+
+	// Determine cascade strategy once (used for action=delete nodes)
+	syncConfig := p.getConfiguration()
+	cascadeStrategy := syncConfig.SyncFullDeleteStrategy
+	if cascadeStrategy == "" {
+		cascadeStrategy = "cascade_delete"
+	}
+
+	// Process nodes
+	syncedNodeExtIDs := make([]string, 0, len(sortedNodes))
+	for i := range sortedNodes {
+		payload := &sortedNodes[i]
+		resp.TotalNodes++
+
+		// Explicit delete action
+		if payload.Action == "delete" {
+			existing, err := p.store.GetNodeByExternalID(req.Source, payload.ExternalID)
+			if err != nil || existing == nil {
+				resp.Errors = append(resp.Errors, "node not found for delete: "+payload.ExternalID)
+				continue
+			}
+			if err := p.store.DeleteNode(existing.ID, cascadeStrategy); err != nil {
+				resp.Errors = append(resp.Errors, "failed to delete node "+payload.ExternalID+": "+err.Error())
+			} else {
+				resp.DeletedNodes++
+			}
+			continue
+		}
+
+		// Resolve parent internal ID
+		parentID := ""
+		if payload.ParentExternalID != "" {
+			parent, err := p.store.GetNodeByExternalID(req.Source, payload.ParentExternalID)
+			if err != nil {
+				resp.Errors = append(resp.Errors, "parent not found for node: "+payload.ExternalID)
+				continue
+			}
+			parentID = parent.ID
+		}
+
+		node := &pluginmodel.OrgNode{
+			Name:        payload.Name,
+			ParentID:    parentID,
+			SortOrder:   payload.SortOrder,
+			Description: payload.Description,
+			Icon:        payload.Icon,
+			Metadata:    payload.Metadata,
+			Source:      req.Source,
+			ExternalID:  payload.ExternalID,
+		}
+		if node.Metadata == "" {
+			node.Metadata = "{}"
+		}
+
+		existing, _ := p.store.GetNodeByExternalID(req.Source, payload.ExternalID)
+		_, err := p.store.UpsertNodeByExternalID(node)
+		if err != nil {
+			resp.Errors = append(resp.Errors, "failed to upsert node "+payload.ExternalID+": "+err.Error())
+		} else if existing != nil {
+			resp.UpdatedNodes++
+		} else {
+			resp.CreatedNodes++
+		}
+		syncedNodeExtIDs = append(syncedNodeExtIDs, payload.ExternalID)
+	}
+
+	// Process members
+	syncedMemberExtIDs := make([]string, 0, len(req.Members))
+	for i := range req.Members {
+		payload := &req.Members[i]
+		resp.TotalMembers++
+
+		// Resolve node (needed for both upsert and delete)
+		node, err := p.store.GetNodeByExternalID(req.Source, payload.NodeExternalID)
+		if err != nil {
+			resp.Errors = append(resp.Errors, "node not found for member: "+payload.ExternalUserID)
+			continue
+		}
+
+		// Explicit delete action
+		if payload.Action == "delete" {
+			mmUserID, skipReason := p.resolveMMUser(syncConfig.SyncUserMatchStrategy, req.Source, payload)
+			if mmUserID == "" {
+				resp.SkippedUsers++
+				resp.SkippedDetails = append(resp.SkippedDetails, pluginmodel.SkippedUser{
+					ExternalUserID:   payload.ExternalUserID,
+					ExternalUsername: payload.ExternalUsername,
+					ExternalEmail:    payload.ExternalEmail,
+					Reason:           skipReason,
+				})
+				continue
+			}
+			if err := p.store.RemoveMember(node.ID, mmUserID); err != nil {
+				resp.Errors = append(resp.Errors, "failed to delete member: "+err.Error())
+			} else {
+				resp.DeletedMembers++
+			}
+			continue
+		}
+
+		// Resolve Mattermost user
+		mmUserID, skipReason := p.resolveMMUser(syncConfig.SyncUserMatchStrategy, req.Source, payload)
+		if mmUserID == "" {
+			resp.SkippedUsers++
+			resp.SkippedDetails = append(resp.SkippedDetails, pluginmodel.SkippedUser{
+				ExternalUserID:   payload.ExternalUserID,
+				ExternalUsername: payload.ExternalUsername,
+				ExternalEmail:    payload.ExternalEmail,
+				Reason:           skipReason,
+			})
+			continue
+		}
+
+		role := payload.Role
+		if role == "" {
+			role = "member"
+		}
+		member := &pluginmodel.OrgMember{
+			NodeID:     node.ID,
+			UserID:     mmUserID,
+			Role:       role,
+			Position:   payload.Position,
+			SortOrder:  payload.SortOrder,
+			Source:     req.Source,
+			ExternalID: payload.ExternalID,
+		}
+
+		existing, _ := p.store.GetMemberRole(node.ID, mmUserID)
+		_, err = p.store.UpsertMemberByExternalID(member)
+		if err != nil {
+			resp.Errors = append(resp.Errors, "failed to upsert member: "+err.Error())
+		} else if existing != nil {
+			resp.UpdatedMembers++
+		} else {
+			resp.CreatedMembers++
+		}
+		if payload.ExternalID != "" {
+			syncedMemberExtIDs = append(syncedMemberExtIDs, payload.ExternalID)
+		}
+	}
+
+	// Full sync: soft-delete stale data from this source
+	if req.SyncType == "full" {
+		if len(req.Nodes) > 0 {
+			deleted, _ := p.store.SoftDeleteNodesBySource(req.Source, syncedNodeExtIDs)
+			resp.DeletedNodes += deleted
+		}
+		if len(req.Members) > 0 {
+			deleted, _ := p.store.SoftDeleteMembersBySource(req.Source, syncedMemberExtIDs)
+			resp.DeletedMembers += deleted
+		}
+	}
+
+	// Determine final status
+	switch {
+	case len(resp.Errors) > 0 && resp.CreatedNodes+resp.UpdatedNodes == 0:
+		resp.Status = "failed"
+	case resp.SkippedUsers > 0 || len(resp.Errors) > 0:
+		resp.Status = "partial_success"
+	default:
+		resp.Status = "success"
+	}
+
+	// Update sync log
+	syncLog.Status = resp.Status
+	syncLog.FinishedAt = mmmodel.GetMillis()
+	syncLog.TotalNodes = resp.TotalNodes
+	syncLog.CreatedNodes = resp.CreatedNodes
+	syncLog.UpdatedNodes = resp.UpdatedNodes
+	syncLog.DeletedNodes = resp.DeletedNodes
+	syncLog.TotalMembers = resp.TotalMembers
+	syncLog.CreatedMembers = resp.CreatedMembers
+	syncLog.UpdatedMembers = resp.UpdatedMembers
+	syncLog.DeletedMembers = resp.DeletedMembers
+	syncLog.SkippedUsers = resp.SkippedUsers
+	_ = p.store.UpdateSyncLog(syncLog)
+
+	// Broadcast tree update to frontend
+	p.broadcastTreeUpdate("sync_complete", nil)
+
+	return resp
+}
+
+// resolveMMUser attempts to find a Mattermost user ID for an external user.
+func (p *Plugin) resolveMMUser(strategy, source string, payload *pluginmodel.SyncMemberPayload) (string, string) {
+	// Step 1: Check user mapping table
+	mapping, err := p.store.GetUserMappingByExternalID(source, payload.ExternalUserID)
+	if err == nil && mapping != nil {
+		return mapping.MmUserID, ""
+	}
+
+	if strategy == "mapping_only" {
+		return "", "user_not_found: no mapping for " + payload.ExternalUserID
+	}
+
+	// Step 2: Match by email
+	if payload.ExternalEmail != "" {
+		user, appErr := p.API.GetUserByEmail(payload.ExternalEmail)
+		if appErr == nil {
+			p.autoCreateUserMapping(source, payload, user.Id)
+			return user.Id, ""
+		}
+		user, appErr = p.API.GetUserByEmail(strings.ToLower(payload.ExternalEmail))
+		if appErr == nil {
+			p.autoCreateUserMapping(source, payload, user.Id)
+			return user.Id, ""
+		}
+	}
+
+	if strategy == "email_only" {
+		return "", "user_not_found: no Mattermost user with email " + payload.ExternalEmail
+	}
+
+	// Step 3: Match by username
+	if payload.ExternalUsername != "" {
+		user, appErr := p.API.GetUserByUsername(payload.ExternalUsername)
+		if appErr == nil {
+			p.autoCreateUserMapping(source, payload, user.Id)
+			return user.Id, ""
+		}
+	}
+
+	return "", "user_not_found: no match for external_user_id=" + payload.ExternalUserID
+}
+
+// autoCreateUserMapping writes a mapping record when auto-matching succeeds.
+func (p *Plugin) autoCreateUserMapping(source string, payload *pluginmodel.SyncMemberPayload, mmUserID string) {
+	mapping := &pluginmodel.UserMapping{
+		Source:           source,
+		ExternalUserID:   payload.ExternalUserID,
+		MmUserID:         mmUserID,
+		ExternalUsername: payload.ExternalUsername,
+		ExternalEmail:    payload.ExternalEmail,
+	}
+	if _, err := p.store.UpsertUserMapping(mapping); err != nil {
+		p.API.LogWarn("failed to auto-create user mapping", "err", err)
+	}
+}
+
+// topologicalSortNodes sorts nodes so parents always come before their children.
+func topologicalSortNodes(nodes []pluginmodel.SyncNodePayload) []pluginmodel.SyncNodePayload {
+	childrenMap := make(map[string][]int) // parentExtID -> indices of children
+	roots := []int{}
+
+	for i, n := range nodes {
+		if n.ParentExternalID == "" {
+			roots = append(roots, i)
+		} else {
+			childrenMap[n.ParentExternalID] = append(childrenMap[n.ParentExternalID], i)
+		}
+	}
+
+	sorted := make([]pluginmodel.SyncNodePayload, 0, len(nodes))
+	queue := roots
+	for len(queue) > 0 {
+		idx := queue[0]
+		queue = queue[1:]
+		sorted = append(sorted, nodes[idx])
+		extID := nodes[idx].ExternalID
+		queue = append(queue, childrenMap[extID]...)
+	}
+
+	// Append any remaining nodes (handles cycles or disconnected nodes gracefully)
+	if len(sorted) < len(nodes) {
+		added := make(map[int]bool)
+		for _, n := range sorted {
+			for i, orig := range nodes {
+				if orig.ExternalID == n.ExternalID {
+					added[i] = true
+					break
+				}
+			}
+		}
+		for i, n := range nodes {
+			if !added[i] {
+				sorted = append(sorted, n)
+			}
+		}
+	}
+
+	return sorted
+}

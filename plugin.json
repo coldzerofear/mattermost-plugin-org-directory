@@ -1,0 +1,95 @@
+{
+    "id": "com.example.org-directory",
+    "name": "组织通讯录",
+    "description": "基于树形组织结构的企业通讯录插件，支持多层级部门管理和用户搜索",
+    "homepage_url": "https://github.com/your-org/mattermost-plugin-org-directory",
+    "support_url": "https://github.com/your-org/mattermost-plugin-org-directory/issues",
+    "icon_path": "assets/icon.svg",
+    "version": "0.1.0",
+    "min_server_version": "9.0.0",
+    "server": {
+        "executables": {
+            "linux-amd64": "server/dist/plugin-linux-amd64",
+            "linux-arm64": "server/dist/plugin-linux-arm64",
+            "darwin-amd64": "server/dist/plugin-darwin-amd64",
+            "darwin-arm64": "server/dist/plugin-darwin-arm64",
+            "windows-amd64": "server/dist/plugin-windows-amd64.exe"
+        }
+    },
+    "webapp": {
+        "bundle_path": "webapp/dist/main.js"
+    },
+    "settings_schema": {
+        "header": "组织通讯录插件配置",
+        "footer": "",
+        "settings": [
+            {
+                "key": "EnableAuditLog",
+                "display_name": "启用操作审计日志:",
+                "type": "bool",
+                "help_text": "记录所有组织结构和成员变更操作",
+                "default": true
+            },
+            {
+                "key": "AllowUserSearch",
+                "display_name": "允许所有用户搜索:",
+                "type": "bool",
+                "help_text": "设为 false 时，仅管理员可搜索其他用户",
+                "default": true
+            },
+            {
+                "key": "MaxTreeDepth",
+                "display_name": "最大组织层级深度:",
+                "type": "text",
+                "help_text": "限制组织树的最大深度（0 表示不限制）",
+                "default": "10"
+            },
+            {
+                "key": "DefaultPageSize",
+                "display_name": "默认分页大小:",
+                "type": "text",
+                "help_text": "每页显示的成员数量",
+                "default": "50"
+            },
+            {
+                "key": "SyncAPIToken",
+                "display_name": "外部同步 API Token:",
+                "type": "text",
+                "help_text": "外部系统调用同步 API 时使用的鉴权 Token。留空则禁用同步 API。请使用足够长度的随机字符串（建议 32 位以上）。",
+                "placeholder": "",
+                "default": "",
+                "secret": true
+            },
+            {
+                "key": "SyncUserMatchStrategy",
+                "display_name": "同步时用户匹配策略:",
+                "type": "radio",
+                "help_text": "外部系统同步成员时，如何将外部用户 ID 匹配到 Mattermost 用户。",
+                "default": "mapping_email_username",
+                "options": [
+                    {"display_name": "映射表 → 邮箱 → 用户名（推荐）", "value": "mapping_email_username"},
+                    {"display_name": "仅映射表（需预先注册映射）", "value": "mapping_only"},
+                    {"display_name": "仅邮箱匹配", "value": "email_only"}
+                ]
+            },
+            {
+                "key": "SyncProtectLocalData",
+                "display_name": "同步时保护本地数据:",
+                "type": "bool",
+                "help_text": "开启后，外部全量同步不会影响 source=local 的手动创建数据（始终建议开启）。",
+                "default": true
+            },
+            {
+                "key": "SyncFullDeleteStrategy",
+                "display_name": "全量同步时的节点删除策略:",
+                "type": "radio",
+                "help_text": "全量同步中自动检测到的被删除节点的处理方式。级联删除：删除节点及其所有子节点和成员关系；子树上移：仅删除该节点，其子节点移动到父节点下。",
+                "default": "cascade_delete",
+                "options": [
+                    {"display_name": "级联删除（推荐）", "value": "cascade_delete"},
+                    {"display_name": "子树上移", "value": "move_to_parent"}
+                ]
+            }
+        ]
+    }
+}
