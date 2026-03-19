@@ -20,10 +20,8 @@ const UserDetailPanel: React.FC<UserDetailPanelProps> = ({member}) => {
     const [isOpeningDM, setIsOpeningDM] = useState(false);
 
     useEffect(() => {
-        if (!userNodes) {
-            dispatch(fetchUserNodes(member.user_id) as any);
-        }
-    }, [dispatch, member.user_id, userNodes]);
+        dispatch(fetchUserNodes(member.user_id, true) as any);
+    }, [dispatch, member.user_id]);
 
     const displayName = [member.first_name, member.last_name].filter(Boolean).join(' ') || member.username;
     const directMessagePath = useMemo(() => {
@@ -167,10 +165,10 @@ const UserDetailPanel: React.FC<UserDetailPanelProps> = ({member}) => {
             {/* Info rows */}
             <div className='org-directory-user-detail-info'>
                 {member.first_name && (
-                    <InfoRow icon={'🪪'} label={'名'} value={member.first_name}/>
+                    <InfoRow icon={'👤'} label={'名'} value={member.first_name}/>
                 )}
                 {member.last_name && (
-                    <InfoRow icon={'🪪'} label={'姓'} value={member.last_name}/>
+                    <InfoRow icon={'👤'} label={'姓'} value={member.last_name}/>
                 )}
                 {member.nickname && (
                     <InfoRow icon={'🏷️'} label={'昵称'} value={member.nickname}/>

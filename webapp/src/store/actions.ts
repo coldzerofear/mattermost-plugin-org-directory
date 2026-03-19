@@ -25,6 +25,7 @@ export const ORG_SELECT_USER = 'ORG_SELECT_USER';
 export const ORG_FETCH_USER_NODES_REQUEST = 'ORG_FETCH_USER_NODES_REQUEST';
 export const ORG_FETCH_USER_NODES_SUCCESS = 'ORG_FETCH_USER_NODES_SUCCESS';
 export const ORG_FETCH_USER_NODES_FAILURE = 'ORG_FETCH_USER_NODES_FAILURE';
+export const ORG_INVALIDATE_USER_NODES = 'ORG_INVALIDATE_USER_NODES';
 
 // Thunk: fetch the top-level roots on initial load
 export const fetchOrgTree = () => async (dispatch: any) => {
@@ -37,13 +38,18 @@ export const fetchOrgTree = () => async (dispatch: any) => {
     }
 };
 
-// Thunk: expand a node — load its children and members if not already cached
+// Thunk: expand or collapse a node while keeping async loading and toggle state consistent
 export const expandNode = (nodeId: string) => async (dispatch: any, getState: any) => {
     const state = getState();
-    // Mattermost registerReducer state is at state['plugins-<pluginId>']
     const pluginState = state['plugins-com.example.org-directory'];
     const alreadyLoaded = pluginState?.loadedNodes?.[nodeId];
     const isLoading = pluginState?.loadingNodes?.[nodeId];
+    const isExpanded = pluginState?.expandedNodes?.[nodeId];
+
+    if (isExpanded) {
+        dispatch({type: ORG_TOGGLE_EXPAND, nodeId, expanded: false});
+        return;
+    }
 
     if (!alreadyLoaded && !isLoading) {
         dispatch({type: ORG_LOAD_CHILDREN_REQUEST, nodeId});
@@ -55,10 +61,17 @@ export const expandNode = (nodeId: string) => async (dispatch: any, getState: an
             dispatch({type: ORG_LOAD_CHILDREN_SUCCESS, nodeId, children: subTree.children || [], members});
         } catch (err: any) {
             dispatch({type: ORG_LOAD_CHILDREN_FAILURE, nodeId, error: err.message});
+            return;
         }
+    } else if (isLoading) {
+        return;
     }
 
-    dispatch({type: ORG_TOGGLE_EXPAND, nodeId});
+    const nextState = getState();
+    const nextPluginState = nextState['plugins-com.example.org-directory'];
+    if (!nextPluginState?.expandedNodes?.[nodeId]) {
+        dispatch({type: ORG_TOGGLE_EXPAND, nodeId, expanded: true});
+    }
 };
 
 // Thunk: search users/nodes
@@ -83,7 +96,12 @@ export const selectUser = (userId: string | null) => ({
 });
 
 // Thunk: fetch all org nodes a user belongs to
-export const fetchUserNodes = (userId: string) => async (dispatch: any) => {
+export const fetchUserNodes = (userId: string, force = false) => async (dispatch: any, getState: any) => {
+    const pluginState = getState()['plugins-com.example.org-directory'];
+    if (!force && pluginState?.userNodes?.[userId]) {
+        return;
+    }
+
     dispatch({type: ORG_FETCH_USER_NODES_REQUEST, userId});
     try {
         const nodes: OrgNode[] = await OrgDirectoryAPI.getUserNodes(userId);
@@ -92,6 +110,11 @@ export const fetchUserNodes = (userId: string) => async (dispatch: any) => {
         dispatch({type: ORG_FETCH_USER_NODES_FAILURE, userId, error: err.message});
     }
 };
+
+export const invalidateUserNodes = (userIds: string[]) => ({
+    type: ORG_INVALIDATE_USER_NODES,
+    userIds,
+});
 
 // WebSocket event handlers
 export const handleTreeUpdate = (data: any) => ({
@@ -138,18 +161,21 @@ export const deleteOrgNode = (nodeId: string) =>
 export const addOrgMember = (nodeId: string, data: {user_id: string; role?: string; position?: string}) =>
     async (dispatch: any): Promise<void> => {
         await OrgDirectoryAPI.addMember(nodeId, data);
+        dispatch(invalidateUserNodes([data.user_id]));
         dispatch(reloadNodeMembers(nodeId) as any);
     };
 
 export const removeOrgMember = (nodeId: string, userId: string) =>
     async (dispatch: any): Promise<void> => {
         await OrgDirectoryAPI.removeMember(nodeId, userId);
+        dispatch(invalidateUserNodes([userId]));
         dispatch(reloadNodeMembers(nodeId) as any);
     };
 
 export const updateOrgMemberRole = (nodeId: string, userId: string, role: string) =>
     async (dispatch: any): Promise<void> => {
         await OrgDirectoryAPI.updateMemberRole(nodeId, userId, role);
+        dispatch(invalidateUserNodes([userId]));
         dispatch(reloadNodeMembers(nodeId) as any);
     };
 

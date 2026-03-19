@@ -18,8 +18,10 @@ import {
     ORG_FETCH_USER_NODES_REQUEST,
     ORG_FETCH_USER_NODES_SUCCESS,
     ORG_FETCH_USER_NODES_FAILURE,
+    ORG_INVALIDATE_USER_NODES,
     ORG_RELOAD_MEMBERS_SUCCESS,
 } from './actions';
+
 
 export interface OrgDirectoryState {
     tree: OrgTreeNode[];
@@ -105,9 +107,10 @@ export default function reducer(state = initialState, action: any): OrgDirectory
             ...state,
             expandedNodes: {
                 ...state.expandedNodes,
-                [action.nodeId]: !state.expandedNodes[action.nodeId],
+                [action.nodeId]: action.expanded ?? !state.expandedNodes[action.nodeId],
             },
         };
+
 
     case ORG_SELECT_NODE:
         return {...state, selectedNodeId: action.nodeId};
@@ -161,7 +164,19 @@ export default function reducer(state = initialState, action: any): OrgDirectory
     case ORG_FETCH_USER_NODES_FAILURE:
         return state;
 
+    case ORG_INVALIDATE_USER_NODES: {
+        const nextUserNodes = {...state.userNodes};
+        for (const userId of action.userIds || []) {
+            delete nextUserNodes[userId];
+        }
+        return {
+            ...state,
+            userNodes: nextUserNodes,
+        };
+    }
+
     case ORG_RELOAD_MEMBERS_SUCCESS: {
+
         const newUsersCache = buildUsersCache(state.usersCache, action.members);
         return {
             ...state,
