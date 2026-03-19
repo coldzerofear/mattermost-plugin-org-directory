@@ -1,8 +1,10 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -157,6 +159,254 @@ func (p *Plugin) handleGetSyncLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, log)
+}
+
+// handleListSyncNodes handles GET /api/v1/sync/nodes.
+func (p *Plugin) handleListSyncNodes(w http.ResponseWriter, r *http.Request) {
+	source := strings.TrimSpace(r.URL.Query().Get("source"))
+	if source == "" {
+		writeError(w, http.StatusBadRequest, "source is required")
+		return
+	}
+
+	nodes, err := p.store.GetNodesBySource(source)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get nodes")
+		return
+	}
+
+	responseNodes := p.buildSyncNodeDTOs(nodes)
+	writeJSON(w, http.StatusOK, &pluginmodel.SyncNodeListResponse{
+		Source: source,
+		Nodes:  responseNodes,
+	})
+}
+
+// handleGetSyncNode handles GET /api/v1/sync/nodes/{externalID}.
+func (p *Plugin) handleGetSyncNode(w http.ResponseWriter, r *http.Request) {
+	source := strings.TrimSpace(r.URL.Query().Get("source"))
+	if source == "" {
+		writeError(w, http.StatusBadRequest, "source is required")
+		return
+	}
+
+	externalID := mux.Vars(r)["externalID"]
+	node, err := p.store.GetNodeByExternalID(source, externalID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			writeError(w, http.StatusNotFound, "node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get node")
+		return
+	}
+
+	pathNodes, err := p.store.GetNodePath(node.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get node path")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, &pluginmodel.SyncNodeDetailResponse{
+		Node: p.buildSyncNodeDTO(node),
+		Path: p.buildSyncNodeDTOs(pathNodes),
+	})
+}
+
+// handleGetSyncNodeChildren handles GET /api/v1/sync/nodes/{externalID}/children.
+func (p *Plugin) handleGetSyncNodeChildren(w http.ResponseWriter, r *http.Request) {
+	source := strings.TrimSpace(r.URL.Query().Get("source"))
+	if source == "" {
+		writeError(w, http.StatusBadRequest, "source is required")
+		return
+	}
+
+	externalID := mux.Vars(r)["externalID"]
+	node, err := p.store.GetNodeByExternalID(source, externalID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			writeError(w, http.StatusNotFound, "node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get node")
+		return
+	}
+
+	children, err := p.store.GetChildNodes(node.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get child nodes")
+		return
+	}
+
+	responseNodes := make([]*pluginmodel.SyncNodeDTO, 0, len(children))
+	for _, child := range children {
+		if child.Source != source {
+			continue
+		}
+		responseNodes = append(responseNodes, p.buildSyncNodeDTO(child))
+	}
+
+	writeJSON(w, http.StatusOK, &pluginmodel.SyncNodeListResponse{
+		Source: source,
+		Nodes:  responseNodes,
+	})
+}
+
+// handleGetSyncNodeMembers handles GET /api/v1/sync/nodes/{externalID}/members.
+func (p *Plugin) handleGetSyncNodeMembers(w http.ResponseWriter, r *http.Request) {
+	source := strings.TrimSpace(r.URL.Query().Get("source"))
+	if source == "" {
+		writeError(w, http.StatusBadRequest, "source is required")
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if perPage <= 0 {
+		perPage = 50
+	}
+	recursive, _ := strconv.ParseBool(r.URL.Query().Get("recursive"))
+
+	externalID := mux.Vars(r)["externalID"]
+	node, err := p.store.GetNodeByExternalID(source, externalID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			writeError(w, http.StatusNotFound, "node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get node")
+		return
+	}
+
+	nodesByID := map[string]*pluginmodel.OrgNode{node.ID: node}
+	targetNodeIDs := []string{node.ID}
+	if recursive {
+		subtree, subTreeErr := p.store.GetSubTree(node.ID)
+		if subTreeErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to get subtree")
+			return
+		}
+		for _, subNode := range subtree {
+			if subNode.Source != source {
+				continue
+			}
+			nodesByID[subNode.ID] = subNode
+			targetNodeIDs = append(targetNodeIDs, subNode.ID)
+		}
+	}
+
+	members, err := p.store.GetMembersForNodes(targetNodeIDs, page, perPage)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get members")
+		return
+	}
+
+	responseMembers := make([]*pluginmodel.SyncNodeMemberItem, 0, len(members))
+	for _, member := range members {
+		memberNode, ok := nodesByID[member.NodeID]
+		if !ok {
+			continue
+		}
+		responseMembers = append(responseMembers, &pluginmodel.SyncNodeMemberItem{
+			OrgMemberWithUser: member,
+			NodeName:          memberNode.Name,
+			NodeSource:        memberNode.Source,
+			NodeExternalID:    memberNode.ExternalID,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, &pluginmodel.SyncNodeMembersResponse{
+		Node:      p.buildSyncNodeDTO(node),
+		Recursive: recursive,
+		Total:     len(responseMembers),
+		Members:   responseMembers,
+	})
+}
+
+// handleGetSyncUserNodes handles GET /api/v1/sync/users/{externalUserID}/nodes.
+func (p *Plugin) handleGetSyncUserNodes(w http.ResponseWriter, r *http.Request) {
+	source := strings.TrimSpace(r.URL.Query().Get("source"))
+	if source == "" {
+		writeError(w, http.StatusBadRequest, "source is required")
+		return
+	}
+
+	externalUserID := mux.Vars(r)["externalUserID"]
+	mapping, err := p.store.GetUserMappingByExternalID(source, externalUserID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			writeError(w, http.StatusNotFound, "user mapping not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get user mapping")
+		return
+	}
+	if mapping == nil || mapping.MmUserID == "" {
+		writeError(w, http.StatusNotFound, "user mapping not found")
+		return
+	}
+
+	nodes, err := p.store.GetUserNodes(mapping.MmUserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get user nodes")
+		return
+	}
+
+	filteredNodes := make([]*pluginmodel.OrgNode, 0, len(nodes))
+	for _, node := range nodes {
+		if node.Source == source {
+			filteredNodes = append(filteredNodes, node)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, &pluginmodel.SyncUserNodesResponse{
+		Source:         source,
+		ExternalUserID: externalUserID,
+		MmUserID:       mapping.MmUserID,
+		Total:          len(filteredNodes),
+		Nodes:          p.buildSyncNodeDTOs(filteredNodes),
+	})
+}
+
+func (p *Plugin) buildSyncNodeDTO(node *pluginmodel.OrgNode) *pluginmodel.SyncNodeDTO {
+	if node == nil {
+		return nil
+	}
+
+	dto := &pluginmodel.SyncNodeDTO{OrgNode: node}
+	if node.ParentID != "" {
+		parent, err := p.store.GetNode(node.ParentID)
+		if err == nil {
+			dto.ParentExternalID = parent.ExternalID
+		}
+	}
+	return dto
+}
+
+func (p *Plugin) buildSyncNodeDTOs(nodes []*pluginmodel.OrgNode) []*pluginmodel.SyncNodeDTO {
+	if len(nodes) == 0 {
+		return []*pluginmodel.SyncNodeDTO{}
+	}
+
+	sortedNodes := append([]*pluginmodel.OrgNode(nil), nodes...)
+	sort.SliceStable(sortedNodes, func(i, j int) bool {
+		if sortedNodes[i].Depth != sortedNodes[j].Depth {
+			return sortedNodes[i].Depth < sortedNodes[j].Depth
+		}
+		if sortedNodes[i].SortOrder != sortedNodes[j].SortOrder {
+			return sortedNodes[i].SortOrder < sortedNodes[j].SortOrder
+		}
+		if sortedNodes[i].Path != sortedNodes[j].Path {
+			return sortedNodes[i].Path < sortedNodes[j].Path
+		}
+		return sortedNodes[i].Name < sortedNodes[j].Name
+	})
+
+	result := make([]*pluginmodel.SyncNodeDTO, 0, len(sortedNodes))
+	for _, node := range sortedNodes {
+		result = append(result, p.buildSyncNodeDTO(node))
+	}
+	return result
 }
 
 // executeSyncRequest runs a full or incremental sync and returns the response.

@@ -4,8 +4,8 @@ package model
 type SyncLog struct {
 	ID             string `json:"id" db:"id"`
 	Source         string `json:"source" db:"source"`
-	SyncType       string `json:"sync_type" db:"sync_type"`       // full / incremental
-	Status         string `json:"status" db:"status"`             // running / success / partial_success / failed
+	SyncType       string `json:"sync_type" db:"sync_type"` // full / incremental
+	Status         string `json:"status" db:"status"`       // running / success / partial_success / failed
 	TotalNodes     int    `json:"total_nodes" db:"total_nodes"`
 	CreatedNodes   int    `json:"created_nodes" db:"created_nodes"`
 	UpdatedNodes   int    `json:"updated_nodes" db:"updated_nodes"`
@@ -76,6 +76,49 @@ type SyncResponse struct {
 	SkippedUsers   int           `json:"skipped_users"`
 	Errors         []string      `json:"errors,omitempty"`
 	SkippedDetails []SkippedUser `json:"skipped_details,omitempty"`
+}
+
+// SyncNodeDTO is the external-facing node shape used by token-auth query APIs.
+type SyncNodeDTO struct {
+	*OrgNode
+	ParentExternalID string `json:"parent_external_id,omitempty"`
+}
+
+// SyncNodeDetailResponse returns a single node with its breadcrumb path.
+type SyncNodeDetailResponse struct {
+	Node *SyncNodeDTO   `json:"node"`
+	Path []*SyncNodeDTO `json:"path,omitempty"`
+}
+
+// SyncNodeListResponse returns a list of nodes for external queries.
+type SyncNodeListResponse struct {
+	Source string         `json:"source"`
+	Nodes  []*SyncNodeDTO `json:"nodes"`
+}
+
+// SyncNodeMemberItem returns a node member together with node identity context.
+type SyncNodeMemberItem struct {
+	*OrgMemberWithUser
+	NodeName       string `json:"node_name"`
+	NodeSource     string `json:"node_source"`
+	NodeExternalID string `json:"node_external_id"`
+}
+
+// SyncNodeMembersResponse returns users mounted on a node or its subtree.
+type SyncNodeMembersResponse struct {
+	Node      *SyncNodeDTO          `json:"node"`
+	Recursive bool                  `json:"recursive"`
+	Total     int                   `json:"total"`
+	Members   []*SyncNodeMemberItem `json:"members"`
+}
+
+// SyncUserNodesResponse returns organization nodes for an external user.
+type SyncUserNodesResponse struct {
+	Source         string         `json:"source"`
+	ExternalUserID string         `json:"external_user_id"`
+	MmUserID       string         `json:"mm_user_id"`
+	Total          int            `json:"total"`
+	Nodes          []*SyncNodeDTO `json:"nodes"`
 }
 
 // SkippedUser records info about a user that could not be matched during sync.

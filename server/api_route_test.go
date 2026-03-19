@@ -32,6 +32,11 @@ func TestSyncRouteMatching(t *testing.T) {
 		// --- External sync token-auth routes ---
 		{"POST /api/v1/sync (full sync)", http.MethodPost, "/api/v1/sync"},
 		{"POST /api/v1/sync/nodes (incremental nodes)", http.MethodPost, "/api/v1/sync/nodes"},
+		{"GET /api/v1/sync/nodes (list nodes)", http.MethodGet, "/api/v1/sync/nodes?source=hr_system"},
+		{"GET /api/v1/sync/nodes/{externalID} (node detail)", http.MethodGet, "/api/v1/sync/nodes/root?source=hr_system"},
+		{"GET /api/v1/sync/nodes/{externalID}/children (node children)", http.MethodGet, "/api/v1/sync/nodes/root/children?source=hr_system"},
+		{"GET /api/v1/sync/nodes/{externalID}/members (node members)", http.MethodGet, "/api/v1/sync/nodes/root/members?source=hr_system"},
+		{"GET /api/v1/sync/users/{externalUserID}/nodes (user nodes)", http.MethodGet, "/api/v1/sync/users/HR-EMP-001/nodes?source=hr_system"},
 		{"POST /api/v1/sync/members (incremental members)", http.MethodPost, "/api/v1/sync/members"},
 		{"POST /api/v1/sync/user-mappings (upsert mappings)", http.MethodPost, "/api/v1/sync/user-mappings"},
 		{"GET /api/v1/sync/user-mappings/{source}", http.MethodGet, "/api/v1/sync/user-mappings/hr_system"},

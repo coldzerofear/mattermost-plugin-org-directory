@@ -321,6 +321,21 @@ func (s *SQLStore) GetNodeByExternalID(source, externalID string) (*pluginmodel.
 	return scanNode(row)
 }
 
+// GetNodesBySource returns all active nodes for an external source.
+func (s *SQLStore) GetNodesBySource(source string) ([]*pluginmodel.OrgNode, error) {
+	rows, err := s.db().Query(`
+		SELECT id, name, parent_id, path, depth, sort_order, description, icon, metadata,
+		       source, external_id, create_at, update_at, delete_at, creator_id
+		FROM org_directory_nodes
+		WHERE source=$1 AND delete_at=0
+		ORDER BY depth, sort_order, name`, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
 // UpsertNodeByExternalID creates or updates a node identified by source+external_id.
 func (s *SQLStore) UpsertNodeByExternalID(node *pluginmodel.OrgNode) (*pluginmodel.OrgNode, error) {
 	existing, err := s.GetNodeByExternalID(node.Source, node.ExternalID)

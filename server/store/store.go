@@ -30,6 +30,7 @@ type NodeStore interface {
 	GetNodeMemberCount(nodeID string, recursive bool) (int64, error)
 	// External sync
 	GetNodeByExternalID(source, externalID string) (*pluginmodel.OrgNode, error)
+	GetNodesBySource(source string) ([]*pluginmodel.OrgNode, error)
 	UpsertNodeByExternalID(node *pluginmodel.OrgNode) (*pluginmodel.OrgNode, error)
 	SoftDeleteNodesBySource(source string, excludeExternalIDs []string) (int, error)
 	SoftDeleteNodes(nodeIDs []string, now int64) error
@@ -40,6 +41,7 @@ type MemberStore interface {
 	AddMember(member *pluginmodel.OrgMember) (*pluginmodel.OrgMember, error)
 	RemoveMember(nodeID, userID string) error
 	GetMembers(nodeID string, page, perPage int) ([]*pluginmodel.OrgMemberWithUser, error)
+	GetMembersForNodes(nodeIDs []string, page, perPage int) ([]*pluginmodel.OrgMemberWithUser, error)
 	GetAllMembersByNodeID(nodeID string) ([]*pluginmodel.OrgMember, error)
 	GetUserNodes(userID string) ([]*pluginmodel.OrgNode, error)
 	UpdateMemberRole(nodeID, userID, role string) error

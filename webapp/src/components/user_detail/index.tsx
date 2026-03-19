@@ -1,5 +1,6 @@
-import React, {useEffect} from 'react';
+import React, {useEffect, useMemo, useState} from 'react';
 import {useDispatch, useSelector} from 'react-redux';
+import {createDirectChannel} from 'mattermost-redux/actions/channels';
 import {OrgMember, OrgNode} from '../../types/org_node';
 import {selectUser, fetchUserNodes} from '../../store/actions';
 import {getUserNodesForUser} from '../../store/selectors';
@@ -11,25 +12,62 @@ interface UserDetailPanelProps {
 const UserDetailPanel: React.FC<UserDetailPanelProps> = ({member}) => {
     const dispatch = useDispatch();
     const userNodes: OrgNode[] | undefined = useSelector((state: any) => getUserNodesForUser(state, member.user_id));
+    const currentUserId = useSelector((state: any) => state?.entities?.users?.currentUserId || '');
+    const currentTeam = useSelector((state: any) => {
+        const teamId = state?.entities?.teams?.currentTeamId;
+        return teamId ? state?.entities?.teams?.teams?.[teamId] : null;
+    });
+    const [isOpeningDM, setIsOpeningDM] = useState(false);
 
     useEffect(() => {
         if (!userNodes) {
             dispatch(fetchUserNodes(member.user_id) as any);
         }
-    }, [member.user_id]);
+    }, [dispatch, member.user_id, userNodes]);
 
     const displayName = [member.first_name, member.last_name].filter(Boolean).join(' ') || member.username;
+    const directMessagePath = useMemo(() => {
+        if (!currentTeam?.name || !member.username) {
+            return '';
+        }
+
+        return `/${currentTeam.name}/messages/@${member.username}`;
+    }, [currentTeam?.name, member.username]);
 
     const handleClose = () => {
         dispatch(selectUser(null));
     };
 
-    // Build DM URL: /<teamName>/messages/@<username>
-    const teamMatch = window.location.pathname.match(/^\/([^/]+)\//);
-    const dmHref = teamMatch ? `/${teamMatch[1]}/messages/@${member.username}` : '';
+    const openDirectMessageInApp = () => {
+        if (!directMessagePath) {
+            return;
+        }
+
+        window.history.pushState({}, '', directMessagePath);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+    };
+
+    const handleSendMessage = async () => {
+        if (!currentUserId || !member.user_id || isOpeningDM) {
+            return;
+        }
+
+        setIsOpeningDM(true);
+        try {
+            const result = await (dispatch as any)(createDirectChannel(currentUserId, member.user_id));
+            if (!result?.error) {
+                openDirectMessageInApp();
+                dispatch(selectUser(null));
+            }
+        } finally {
+            setIsOpeningDM(false);
+        }
+    };
 
     const renderOrgPath = (node: OrgNode) => {
-        // path looks like "/rootId/parentId/selfId" — show node name hierarchy
+        if (node.path_names && node.path_names.length > 0) {
+            return node.path_names.join(' / ');
+        }
         return node.name;
     };
 
@@ -116,6 +154,9 @@ const UserDetailPanel: React.FC<UserDetailPanelProps> = ({member}) => {
                 </div>
                 <div style={{fontWeight: 700, fontSize: '16px'}}>{displayName}</div>
                 <div style={{color: '#999', fontSize: '13px', marginTop: '2px'}}>{'@'}{member.username}</div>
+                {member.nickname && (
+                    <div style={{color: '#666', fontSize: '12px', marginTop: '4px'}}>{'昵称: '}{member.nickname}</div>
+                )}
                 {member.status && (
                     <div style={{fontSize: '12px', marginTop: '4px', color: '#666'}}>
                         {statusDot(member.status)}
@@ -125,11 +166,20 @@ const UserDetailPanel: React.FC<UserDetailPanelProps> = ({member}) => {
 
             {/* Info rows */}
             <div className='org-directory-user-detail-info'>
+                {member.first_name && (
+                    <InfoRow icon={'🪪'} label={'名'} value={member.first_name}/>
+                )}
+                {member.last_name && (
+                    <InfoRow icon={'🪪'} label={'姓'} value={member.last_name}/>
+                )}
+                {member.nickname && (
+                    <InfoRow icon={'🏷️'} label={'昵称'} value={member.nickname}/>
+                )}
                 {member.email && (
-                    <InfoRow icon={'📧'} value={member.email}/>
+                    <InfoRow icon={'📧'} label={'邮箱'} value={member.email}/>
                 )}
                 {(member.position || member.mm_position) && (
-                    <InfoRow icon={'💼'} value={member.position || member.mm_position}/>
+                    <InfoRow icon={'💼'} label={'职位'} value={member.position || member.mm_position}/>
                 )}
 
                 {/* Org paths */}
@@ -151,7 +201,7 @@ const UserDetailPanel: React.FC<UserDetailPanelProps> = ({member}) => {
                                 }}
                             >
                                 <span>{'🏢'}</span>
-                                <span>{renderOrgPath(node)}</span>
+                                <span title={renderOrgPath(node)}>{renderOrgPath(node)}</span>
                             </div>
                         ))}
                     </div>
@@ -172,10 +222,12 @@ const UserDetailPanel: React.FC<UserDetailPanelProps> = ({member}) => {
                     gap: '8px',
                 }}
             >
-                {dmHref && (
-                    <a
+                {currentUserId && currentUserId !== member.user_id && directMessagePath && (
+                    <button
                         className='org-directory-btn-primary'
-                        href={dmHref}
+                        type='button'
+                        onClick={handleSendMessage}
+                        disabled={isOpeningDM}
                         style={{
                             flex: 1,
                             padding: '8px 12px',
@@ -185,13 +237,13 @@ const UserDetailPanel: React.FC<UserDetailPanelProps> = ({member}) => {
                             color: '#fff',
                             fontWeight: 600,
                             fontSize: '13px',
-                            cursor: 'pointer',
+                            cursor: isOpeningDM ? 'default' : 'pointer',
                             textAlign: 'center',
-                            textDecoration: 'none',
+                            opacity: isOpeningDM ? 0.7 : 1,
                         }}
                     >
-                        {'发送消息'}
-                    </a>
+                        {isOpeningDM ? '打开中...' : '发送消息'}
+                    </button>
                 )}
             </div>
         </div>
@@ -200,10 +252,11 @@ const UserDetailPanel: React.FC<UserDetailPanelProps> = ({member}) => {
 
 interface InfoRowProps {
     icon: string;
+    label?: string;
     value: string;
 }
 
-const InfoRow: React.FC<InfoRowProps> = ({icon, value}) => (
+const InfoRow: React.FC<InfoRowProps> = ({icon, label, value}) => (
     <div
         style={{
             display: 'flex',
@@ -215,7 +268,9 @@ const InfoRow: React.FC<InfoRowProps> = ({icon, value}) => (
         }}
     >
         <span style={{flexShrink: 0}}>{icon}</span>
-        <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{value}</span>
+        <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+            {label ? `${label}: ${value}` : value}
+        </span>
     </div>
 );
 

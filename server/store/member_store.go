@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -86,6 +87,46 @@ func (s *SQLStore) GetMembers(nodeID string, page, perPage int) ([]*pluginmodel.
 		ORDER BY m.sort_order, u.username
 		LIMIT $2 OFFSET $3`,
 		nodeID, perPage, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMembersWithUser(rows)
+}
+
+// GetMembersForNodes returns paginated members for a set of nodes.
+func (s *SQLStore) GetMembersForNodes(nodeIDs []string, page, perPage int) ([]*pluginmodel.OrgMemberWithUser, error) {
+	if len(nodeIDs) == 0 {
+		return []*pluginmodel.OrgMemberWithUser{}, nil
+	}
+
+	sortedNodeIDs := append([]string(nil), nodeIDs...)
+	sort.Strings(sortedNodeIDs)
+
+	placeholders := make([]string, len(sortedNodeIDs))
+	args := make([]interface{}, 0, len(sortedNodeIDs)+2)
+	for i, nodeID := range sortedNodeIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args = append(args, nodeID)
+	}
+
+	offset := page * perPage
+	limitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args)+2)
+	args = append(args, perPage, offset)
+
+	query := fmt.Sprintf(`
+		SELECT m.id, m.node_id, m.user_id, m.role, m.position, m.sort_order,
+		       m.source, m.external_id, m.create_at, m.update_at, m.delete_at,
+		       COALESCE(u.username,''), COALESCE(u.firstname,''), COALESCE(u.lastname,''),
+		       COALESCE(u.nickname,''), COALESCE(u.email,''), COALESCE(u.position,'')
+		FROM org_directory_members m
+		JOIN users u ON m.user_id = u.id
+		WHERE m.node_id IN (%s) AND m.delete_at=0 AND u.deleteat=0
+		ORDER BY m.node_id, m.sort_order, u.username
+		LIMIT %s OFFSET %s`, strings.Join(placeholders, ","), limitPlaceholder, offsetPlaceholder)
+
+	rows, err := s.db().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

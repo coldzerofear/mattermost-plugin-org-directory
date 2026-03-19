@@ -1,6 +1,11 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -17,8 +22,8 @@ import (
 // ----------------------------------------------------------------------------
 
 type syncTestStore struct {
-	nodes        map[string]*pluginmodel.OrgNode    // (source+":"+externalID) → node
-	members      map[string]*pluginmodel.OrgMember  // (nodeID+":"+userID) → member
+	nodes        map[string]*pluginmodel.OrgNode     // (source+":"+externalID) → node
+	members      map[string]*pluginmodel.OrgMember   // (nodeID+":"+userID) → member
 	userMappings map[string]*pluginmodel.UserMapping // (source+":"+extUserID) → mapping
 }
 
@@ -37,7 +42,30 @@ func syncMappingKey(source, extUserID string) string { return source + ":" + ext
 // --- NodeStore ---
 
 func (s *syncTestStore) GetNodeByExternalID(source, externalID string) (*pluginmodel.OrgNode, error) {
-	return s.nodes[syncNodeKey(source, externalID)], nil
+	node := s.nodes[syncNodeKey(source, externalID)]
+	if node == nil {
+		return nil, nil
+	}
+	return node, nil
+}
+
+func (s *syncTestStore) GetNodesBySource(source string) ([]*pluginmodel.OrgNode, error) {
+	result := make([]*pluginmodel.OrgNode, 0)
+	for _, node := range s.nodes {
+		if node.Source == source {
+			result = append(result, node)
+		}
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Depth != result[j].Depth {
+			return result[i].Depth < result[j].Depth
+		}
+		if result[i].SortOrder != result[j].SortOrder {
+			return result[i].SortOrder < result[j].SortOrder
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
 }
 
 func (s *syncTestStore) UpsertNodeByExternalID(node *pluginmodel.OrgNode) (*pluginmodel.OrgNode, error) {
@@ -67,7 +95,12 @@ func (s *syncTestStore) CreateNode(node *pluginmodel.OrgNode) (*pluginmodel.OrgN
 	panic("not implemented in sync test store")
 }
 func (s *syncTestStore) GetNode(id string) (*pluginmodel.OrgNode, error) {
-	panic("not implemented in sync test store")
+	for _, node := range s.nodes {
+		if node.ID == id {
+			return node, nil
+		}
+	}
+	return nil, nil
 }
 func (s *syncTestStore) UpdateNode(node *pluginmodel.OrgNode) error {
 	panic("not implemented in sync test store")
@@ -76,10 +109,36 @@ func (s *syncTestStore) DeleteNode(id string, strategy string) error {
 	panic("not implemented in sync test store")
 }
 func (s *syncTestStore) GetChildNodes(parentID string) ([]*pluginmodel.OrgNode, error) {
-	panic("not implemented in sync test store")
+	children := make([]*pluginmodel.OrgNode, 0)
+	for _, node := range s.nodes {
+		if node.ParentID == parentID {
+			children = append(children, node)
+		}
+	}
+	sort.SliceStable(children, func(i, j int) bool {
+		if children[i].SortOrder != children[j].SortOrder {
+			return children[i].SortOrder < children[j].SortOrder
+		}
+		return children[i].Name < children[j].Name
+	})
+	return children, nil
 }
 func (s *syncTestStore) GetSubTree(nodeID string) ([]*pluginmodel.OrgNode, error) {
-	panic("not implemented in sync test store")
+	node, _ := s.GetNode(nodeID)
+	if node == nil {
+		return nil, nil
+	}
+	result := make([]*pluginmodel.OrgNode, 0)
+	prefix := node.Path + "/"
+	for _, candidate := range s.nodes {
+		if strings.HasPrefix(candidate.Path, prefix) {
+			result = append(result, candidate)
+		}
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].Path < result[j].Path
+	})
+	return result, nil
 }
 func (s *syncTestStore) MoveNode(nodeID, newParentID string) error {
 	panic("not implemented in sync test store")
@@ -91,7 +150,19 @@ func (s *syncTestStore) SearchNodes(query string) ([]*pluginmodel.OrgNode, error
 	panic("not implemented in sync test store")
 }
 func (s *syncTestStore) GetNodePath(nodeID string) ([]*pluginmodel.OrgNode, error) {
-	panic("not implemented in sync test store")
+	node, _ := s.GetNode(nodeID)
+	if node == nil {
+		return nil, nil
+	}
+	parts := strings.Split(strings.TrimPrefix(node.Path, "/"), "/")
+	result := make([]*pluginmodel.OrgNode, 0, len(parts))
+	for _, id := range parts {
+		pathNode, _ := s.GetNode(id)
+		if pathNode != nil {
+			result = append(result, pathNode)
+		}
+	}
+	return result, nil
 }
 func (s *syncTestStore) ReorderNodes(parentID string, nodeIDs []string) error {
 	panic("not implemented in sync test store")
@@ -147,13 +218,67 @@ func (s *syncTestStore) RemoveMember(nodeID, userID string) error {
 	panic("not implemented in sync test store")
 }
 func (s *syncTestStore) GetMembers(nodeID string, page, perPage int) ([]*pluginmodel.OrgMemberWithUser, error) {
-	panic("not implemented in sync test store")
+	return s.GetMembersForNodes([]string{nodeID}, page, perPage)
+}
+func (s *syncTestStore) GetMembersForNodes(nodeIDs []string, page, perPage int) ([]*pluginmodel.OrgMemberWithUser, error) {
+	nodeSet := make(map[string]bool, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		nodeSet[nodeID] = true
+	}
+	result := make([]*pluginmodel.OrgMemberWithUser, 0)
+	for _, member := range s.members {
+		if !nodeSet[member.NodeID] {
+			continue
+		}
+		result = append(result, &pluginmodel.OrgMemberWithUser{
+			OrgMember: member,
+			Username:  member.UserID,
+			Email:     member.UserID + "@example.com",
+		})
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].NodeID != result[j].NodeID {
+			return result[i].NodeID < result[j].NodeID
+		}
+		return result[i].UserID < result[j].UserID
+	})
+	start := page * perPage
+	if start >= len(result) {
+		return []*pluginmodel.OrgMemberWithUser{}, nil
+	}
+	end := start + perPage
+	if end > len(result) {
+		end = len(result)
+	}
+	return result[start:end], nil
 }
 func (s *syncTestStore) GetAllMembersByNodeID(nodeID string) ([]*pluginmodel.OrgMember, error) {
 	panic("not implemented in sync test store")
 }
 func (s *syncTestStore) GetUserNodes(userID string) ([]*pluginmodel.OrgNode, error) {
-	panic("not implemented in sync test store")
+	result := make([]*pluginmodel.OrgNode, 0)
+	seen := map[string]bool{}
+	for _, member := range s.members {
+		if member.UserID != userID {
+			continue
+		}
+		node, _ := s.GetNode(member.NodeID)
+		if node == nil || seen[node.ID] {
+			continue
+		}
+		seen[node.ID] = true
+		result = append(result, node)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Depth != result[j].Depth {
+			return result[i].Depth < result[j].Depth
+		}
+		if result[i].SortOrder != result[j].SortOrder {
+			return result[i].SortOrder < result[j].SortOrder
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
 }
 func (s *syncTestStore) UpdateMemberRole(nodeID, userID, role string) error {
 	panic("not implemented in sync test store")
@@ -587,5 +712,208 @@ func TestSyncMultiSourceParallelNodes(t *testing.T) {
 	}
 	if len(ts.nodes) != 4 {
 		t.Errorf("expected 4 nodes after second source_a sync, got %d", len(ts.nodes))
+	}
+}
+
+func TestHandleListSyncNodes(t *testing.T) {
+	apiMock, ts := newSyncAPIandStore()
+	p := buildSyncPlugin(apiMock, ts, "mapping_email_username")
+	p.initializeAPI()
+
+	ts.nodes[syncNodeKey("hr", "root")] = &pluginmodel.OrgNode{
+		ID:         "node-root",
+		Name:       "Root",
+		Path:       "/node-root",
+		Depth:      0,
+		Source:     "hr",
+		ExternalID: "root",
+		Metadata:   "{}",
+	}
+	ts.nodes[syncNodeKey("hr", "child")] = &pluginmodel.OrgNode{
+		ID:         "node-child",
+		Name:       "Child",
+		ParentID:   "node-root",
+		Path:       "/node-root/node-child",
+		Depth:      1,
+		Source:     "hr",
+		ExternalID: "child",
+		Metadata:   "{}",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sync/nodes?source=hr", nil)
+	req.Header.Set("Authorization", "Bearer sync-token")
+	rec := httptest.NewRecorder()
+
+	p.configuration = &configuration{SyncAPIToken: "sync-token"}
+	p.ServeHTTP(nil, rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp pluginmodel.SyncNodeListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Source != "hr" {
+		t.Fatalf("expected source hr, got %q", resp.Source)
+	}
+	if len(resp.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(resp.Nodes))
+	}
+	if resp.Nodes[1].ParentExternalID != "root" {
+		t.Fatalf("expected child parent external id root, got %q", resp.Nodes[1].ParentExternalID)
+	}
+}
+
+func TestHandleGetSyncNodeMembersRecursive(t *testing.T) {
+	apiMock, ts := newSyncAPIandStore()
+	p := buildSyncPlugin(apiMock, ts, "mapping_email_username")
+	p.initializeAPI()
+
+	ts.nodes[syncNodeKey("hr", "root")] = &pluginmodel.OrgNode{
+		ID:         "node-root",
+		Name:       "Root",
+		Path:       "/node-root",
+		Depth:      0,
+		Source:     "hr",
+		ExternalID: "root",
+		Metadata:   "{}",
+	}
+	ts.nodes[syncNodeKey("hr", "child")] = &pluginmodel.OrgNode{
+		ID:         "node-child",
+		Name:       "Child",
+		ParentID:   "node-root",
+		Path:       "/node-root/node-child",
+		Depth:      1,
+		Source:     "hr",
+		ExternalID: "child",
+		Metadata:   "{}",
+	}
+	ts.members[syncMemberKey("node-root", "user-root")] = &pluginmodel.OrgMember{
+		ID:         "mem-root",
+		NodeID:     "node-root",
+		UserID:     "user-root",
+		Source:     "hr",
+		ExternalID: "m-root",
+	}
+	ts.members[syncMemberKey("node-child", "user-child")] = &pluginmodel.OrgMember{
+		ID:         "mem-child",
+		NodeID:     "node-child",
+		UserID:     "user-child",
+		Source:     "hr",
+		ExternalID: "m-child",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sync/nodes/root/members?source=hr&recursive=true", nil)
+	req.Header.Set("Authorization", "Bearer sync-token")
+	rec := httptest.NewRecorder()
+
+	p.configuration = &configuration{SyncAPIToken: "sync-token"}
+	p.ServeHTTP(nil, rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp pluginmodel.SyncNodeMembersResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !resp.Recursive {
+		t.Fatal("expected recursive flag true")
+	}
+	if resp.Total != 2 {
+		t.Fatalf("expected total 2, got %d", resp.Total)
+	}
+	memberNodes := map[string]bool{}
+	for _, member := range resp.Members {
+		memberNodes[member.NodeExternalID] = true
+	}
+	if !memberNodes["root"] || !memberNodes["child"] {
+		t.Fatalf("expected members from root and child nodes, got %+v", memberNodes)
+	}
+}
+
+func TestHandleGetSyncUserNodes(t *testing.T) {
+	apiMock, ts := newSyncAPIandStore()
+	p := buildSyncPlugin(apiMock, ts, "mapping_email_username")
+	p.initializeAPI()
+
+	ts.userMappings[syncMappingKey("hr", "HR-EMP-001")] = &pluginmodel.UserMapping{
+		Source:         "hr",
+		ExternalUserID: "HR-EMP-001",
+		MmUserID:       "mm-user-001",
+	}
+	ts.nodes[syncNodeKey("hr", "root")] = &pluginmodel.OrgNode{
+		ID:         "node-root",
+		Name:       "Root",
+		Path:       "/node-root",
+		Depth:      0,
+		Source:     "hr",
+		ExternalID: "root",
+		Metadata:   "{}",
+	}
+	ts.nodes[syncNodeKey("hr", "child")] = &pluginmodel.OrgNode{
+		ID:         "node-child",
+		Name:       "Child",
+		ParentID:   "node-root",
+		Path:       "/node-root/node-child",
+		Depth:      1,
+		Source:     "hr",
+		ExternalID: "child",
+		Metadata:   "{}",
+	}
+	ts.nodes[syncNodeKey("oa", "other")] = &pluginmodel.OrgNode{
+		ID:         "node-other",
+		Name:       "Other",
+		Path:       "/node-other",
+		Depth:      0,
+		Source:     "oa",
+		ExternalID: "other",
+		Metadata:   "{}",
+	}
+	ts.members[syncMemberKey("node-root", "mm-user-001")] = &pluginmodel.OrgMember{
+		ID:     "member-root",
+		NodeID: "node-root",
+		UserID: "mm-user-001",
+		Source: "hr",
+	}
+	ts.members[syncMemberKey("node-child", "mm-user-001")] = &pluginmodel.OrgMember{
+		ID:     "member-child",
+		NodeID: "node-child",
+		UserID: "mm-user-001",
+		Source: "hr",
+	}
+	ts.members[syncMemberKey("node-other", "mm-user-001")] = &pluginmodel.OrgMember{
+		ID:     "member-other",
+		NodeID: "node-other",
+		UserID: "mm-user-001",
+		Source: "oa",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sync/users/HR-EMP-001/nodes?source=hr", nil)
+	req.Header.Set("Authorization", "Bearer sync-token")
+	rec := httptest.NewRecorder()
+
+	p.configuration = &configuration{SyncAPIToken: "sync-token"}
+	p.ServeHTTP(nil, rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp pluginmodel.SyncUserNodesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.MmUserID != "mm-user-001" {
+		t.Fatalf("expected mapped MM user mm-user-001, got %q", resp.MmUserID)
+	}
+	if resp.Total != 2 {
+		t.Fatalf("expected 2 hr nodes, got %d", resp.Total)
+	}
+	if resp.Nodes[1].ParentExternalID != "root" {
+		t.Fatalf("expected child parent external id root, got %q", resp.Nodes[1].ParentExternalID)
 	}
 }

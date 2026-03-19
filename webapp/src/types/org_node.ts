@@ -14,6 +14,7 @@ export interface OrgNode {
     update_at: number;
     member_count: number;
     has_children: boolean;
+    path_names?: string[];
     children?: OrgNode[];
 }
 

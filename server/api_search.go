@@ -67,5 +67,18 @@ func (p *Plugin) handleGetUserNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for _, node := range nodes {
+		pathNodes, pathErr := p.store.GetNodePath(node.ID)
+		if pathErr != nil {
+			continue
+		}
+
+		pathNames := make([]string, 0, len(pathNodes))
+		for _, pathNode := range pathNodes {
+			pathNames = append(pathNames, pathNode.Name)
+		}
+		node.PathNames = pathNames
+	}
+
 	writeJSON(w, http.StatusOK, nodes)
 }

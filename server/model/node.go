@@ -22,14 +22,15 @@ type OrgNode struct {
 	Children    []*OrgNode `json:"children,omitempty" db:"-"`
 	MemberCount int64      `json:"member_count,omitempty" db:"-"`
 	HasChildren bool       `json:"has_children" db:"-"`
+	PathNames   []string   `json:"path_names,omitempty" db:"-"`
 }
 
 // OrgTreeNode is used for frontend tree rendering.
 type OrgTreeNode struct {
 	*OrgNode
-	Children    []*OrgTreeNode      `json:"children"`
+	Children    []*OrgTreeNode       `json:"children"`
 	Members     []*OrgMemberWithUser `json:"members,omitempty"`
-	MemberCount int64               `json:"member_count"`
+	MemberCount int64                `json:"member_count"`
 }
 
 // IsValid validates the OrgNode fields.

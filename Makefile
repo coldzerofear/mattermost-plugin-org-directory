@@ -1,6 +1,20 @@
-GO ?= $(shell command -v go 2> /dev/null)
-NPM ?= $(shell command -v npm 2> /dev/null)
-CURL ?= $(shell command -v curl 2> /dev/null)
+UNAME_S := $(shell uname -s 2> /dev/null)
+IS_WINDOWS_SHELL := $(filter MINGW% MSYS% CYGWIN%,$(UNAME_S))
+
+ifeq ($(OS),Windows_NT)
+    GO ?= go
+    NPM ?= npm.cmd
+    CURL ?= curl.exe
+else ifneq ($(IS_WINDOWS_SHELL),)
+    GO ?= go
+    NPM ?= npm.cmd
+    CURL ?= curl
+else
+    GO ?= $(shell command -v go 2> /dev/null)
+    NPM ?= $(shell command -v npm 2> /dev/null)
+    CURL ?= $(shell command -v curl 2> /dev/null)
+endif
+
 MM_DEBUG ?=
 MANIFEST_FILE ?= plugin.json
 GOPATH ?= $(shell go env GOPATH)
@@ -104,10 +118,16 @@ endif
 ifneq ($(HAS_SERVER),)
 	mkdir -p dist/$(PLUGIN_ID)/server
 	cp -r server/dist dist/$(PLUGIN_ID)/server/
+ifeq ($(OS),Windows_NT)
+	find dist/$(PLUGIN_ID)/server/dist -type f \( ! -name "*.exe" \) -exec chmod 755 {} \;
+else
+	find dist/$(PLUGIN_ID)/server/dist -type f \( ! -name "*.exe" \) -exec chmod 755 {} \;
+endif
 endif
 ifneq ($(HAS_WEBAPP),)
 	mkdir -p dist/$(PLUGIN_ID)/webapp
 	cp -r webapp/dist dist/$(PLUGIN_ID)/webapp/
+	rm -f dist/$(PLUGIN_ID)/webapp/dist/debug.log
 endif
 ifeq ($(shell uname),Darwin)
 	cd dist && tar --disable-copyfile -cvzf $(BUNDLE_NAME) $(PLUGIN_ID)
