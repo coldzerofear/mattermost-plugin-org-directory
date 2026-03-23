@@ -177,14 +177,37 @@ func (s *syncTestStore) SoftDeleteNodes(nodeIDs []string, now int64) error {
 // --- MemberStore ---
 
 func (s *syncTestStore) UpsertMemberByExternalID(member *pluginmodel.OrgMember) (*pluginmodel.OrgMember, error) {
-	if member.ID == "" {
-		member.ID = model.NewId()
+	if strings.TrimSpace(member.ExternalID) == "" {
+		return s.UpsertMemberByNodeAndUser(member)
 	}
-	s.members[syncMemberKey(member.NodeID, member.UserID)] = member
-	return member, nil
+
+	for key, existing := range s.members {
+		if existing.Source == member.Source && existing.ExternalID == member.ExternalID {
+			delete(s.members, key)
+			existing.NodeID = member.NodeID
+			existing.UserID = member.UserID
+			existing.Role = member.Role
+			existing.Position = member.Position
+			existing.SortOrder = member.SortOrder
+			existing.ExternalID = member.ExternalID
+			s.members[syncMemberKey(member.NodeID, member.UserID)] = existing
+			return existing, nil
+		}
+	}
+
+	return s.UpsertMemberByNodeAndUser(member)
 }
 
 func (s *syncTestStore) UpsertMemberByNodeAndUser(member *pluginmodel.OrgMember) (*pluginmodel.OrgMember, error) {
+	if existing := s.members[syncMemberKey(member.NodeID, member.UserID)]; existing != nil {
+		existing.Role = member.Role
+		existing.Position = member.Position
+		existing.SortOrder = member.SortOrder
+		if strings.TrimSpace(member.ExternalID) != "" {
+			existing.ExternalID = member.ExternalID
+		}
+		return existing, nil
+	}
 	if member.ID == "" {
 		member.ID = model.NewId()
 	}
@@ -196,17 +219,29 @@ func (s *syncTestStore) GetMemberRole(nodeID, userID string) (*pluginmodel.OrgMe
 	return s.members[syncMemberKey(nodeID, userID)], nil
 }
 
-func (s *syncTestStore) SoftDeleteMembersBySource(source string, excludeExternalIDs []string) (int, error) {
-	exclude := make(map[string]bool, len(excludeExternalIDs))
+func (s *syncTestStore) SoftDeleteMembersBySource(source string, excludeExternalIDs []string, excludeNodeUserKeys []string) (int, error) {
+	excludeExternal := make(map[string]bool, len(excludeExternalIDs))
 	for _, id := range excludeExternalIDs {
-		exclude[id] = true
+		excludeExternal[id] = true
+	}
+	excludeNodeUser := make(map[string]bool, len(excludeNodeUserKeys))
+	for _, key := range excludeNodeUserKeys {
+		excludeNodeUser[key] = true
 	}
 	deleted := 0
 	for k, m := range s.members {
-		if m.Source == source && !exclude[m.ExternalID] {
-			delete(s.members, k)
-			deleted++
+		if m.Source != source {
+			continue
 		}
+		if strings.TrimSpace(m.ExternalID) != "" {
+			if excludeExternal[m.ExternalID] {
+				continue
+			}
+		} else if excludeNodeUser[k] {
+			continue
+		}
+		delete(s.members, k)
+		deleted++
 	}
 	return deleted, nil
 }
@@ -253,7 +288,13 @@ func (s *syncTestStore) GetMembersForNodes(nodeIDs []string, page, perPage int) 
 	return result[start:end], nil
 }
 func (s *syncTestStore) GetAllMembersByNodeID(nodeID string) ([]*pluginmodel.OrgMember, error) {
-	panic("not implemented in sync test store")
+	result := make([]*pluginmodel.OrgMember, 0)
+	for _, member := range s.members {
+		if member.NodeID == nodeID {
+			result = append(result, member)
+		}
+	}
+	return result, nil
 }
 func (s *syncTestStore) GetUserNodes(userID string) ([]*pluginmodel.OrgNode, error) {
 	result := make([]*pluginmodel.OrgNode, 0)
@@ -608,6 +649,158 @@ func TestSyncEmailFallbackResolution(t *testing.T) {
 	// Auto-mapping should have been created
 	if ts.userMappings[syncMappingKey("hr", "hr-alice-001")] == nil {
 		t.Error("expected auto-mapping to be created for email-matched user")
+	}
+}
+
+func TestSyncMembersWithoutExternalIDUsesNaturalKey(t *testing.T) {
+	apiMock, ts := newSyncAPIandStore()
+	p := buildSyncPlugin(apiMock, ts, "mapping_only")
+
+	mmUserID := model.NewId()
+	nodeID := model.NewId()
+	ts.nodes[syncNodeKey("hr", "dept-1")] = &pluginmodel.OrgNode{
+		ID: nodeID, Name: "Dept 1", Source: "hr", ExternalID: "dept-1", Metadata: "{}",
+	}
+	ts.userMappings[syncMappingKey("hr", "ext-user-001")] = &pluginmodel.UserMapping{
+		Source: "hr", ExternalUserID: "ext-user-001", MmUserID: mmUserID,
+	}
+
+	createResp := p.executeSyncRequest(&pluginmodel.SyncRequest{
+		Source:   "hr",
+		SyncType: "incremental",
+		Members: []pluginmodel.SyncMemberPayload{{
+			NodeExternalID: "dept-1",
+			ExternalUserID: "ext-user-001",
+			Role:           "member",
+			Position:       "工程师",
+		}},
+	})
+	if createResp.Status != "success" || createResp.CreatedMembers != 1 {
+		t.Fatalf("expected first natural-key sync to create member, got status=%s created=%d errors=%v", createResp.Status, createResp.CreatedMembers, createResp.Errors)
+	}
+	member := ts.members[syncMemberKey(nodeID, mmUserID)]
+	if member == nil {
+		t.Fatal("expected member stored by node+user natural key")
+	}
+	if member.ExternalID != "" {
+		t.Fatalf("expected empty external_id, got %q", member.ExternalID)
+	}
+
+	updateResp := p.executeSyncRequest(&pluginmodel.SyncRequest{
+		Source:   "hr",
+		SyncType: "incremental",
+		Members: []pluginmodel.SyncMemberPayload{{
+			NodeExternalID: "dept-1",
+			ExternalUserID: "ext-user-001",
+			Role:           "admin",
+			Position:       "负责人",
+		}},
+	})
+	if updateResp.Status != "success" || updateResp.UpdatedMembers != 1 {
+		t.Fatalf("expected second natural-key sync to update member, got status=%s updated=%d errors=%v", updateResp.Status, updateResp.UpdatedMembers, updateResp.Errors)
+	}
+	updatedMember := ts.members[syncMemberKey(nodeID, mmUserID)]
+	if updatedMember == nil || updatedMember.Role != "admin" || updatedMember.Position != "负责人" {
+		t.Fatalf("expected natural-key update to modify existing member, got %+v", updatedMember)
+	}
+}
+
+func TestSyncMembersExternalIDCanRebindRelation(t *testing.T) {
+	apiMock, ts := newSyncAPIandStore()
+	p := buildSyncPlugin(apiMock, ts, "mapping_only")
+
+	firstUserID := model.NewId()
+	secondUserID := model.NewId()
+	nodeID := model.NewId()
+	ts.nodes[syncNodeKey("hr", "dept-1")] = &pluginmodel.OrgNode{
+		ID: nodeID, Name: "Dept 1", Source: "hr", ExternalID: "dept-1", Metadata: "{}",
+	}
+	ts.userMappings[syncMappingKey("hr", "ext-user-001")] = &pluginmodel.UserMapping{
+		Source: "hr", ExternalUserID: "ext-user-001", MmUserID: firstUserID,
+	}
+	ts.userMappings[syncMappingKey("hr", "ext-user-002")] = &pluginmodel.UserMapping{
+		Source: "hr", ExternalUserID: "ext-user-002", MmUserID: secondUserID,
+	}
+
+	firstResp := p.executeSyncRequest(&pluginmodel.SyncRequest{
+		Source:   "hr",
+		SyncType: "incremental",
+		Members: []pluginmodel.SyncMemberPayload{{
+			ExternalID:     "rel-001",
+			NodeExternalID: "dept-1",
+			ExternalUserID: "ext-user-001",
+			Role:           "member",
+		}},
+	})
+	if firstResp.Status != "success" || firstResp.CreatedMembers != 1 {
+		t.Fatalf("expected first external-id sync to create member, got status=%s created=%d errors=%v", firstResp.Status, firstResp.CreatedMembers, firstResp.Errors)
+	}
+
+	secondResp := p.executeSyncRequest(&pluginmodel.SyncRequest{
+		Source:   "hr",
+		SyncType: "incremental",
+		Members: []pluginmodel.SyncMemberPayload{{
+			ExternalID:     "rel-001",
+			NodeExternalID: "dept-1",
+			ExternalUserID: "ext-user-002",
+			Role:           "manager",
+		}},
+	})
+	if secondResp.Status != "success" || secondResp.UpdatedMembers != 1 {
+		t.Fatalf("expected second external-id sync to update relation, got status=%s updated=%d errors=%v", secondResp.Status, secondResp.UpdatedMembers, secondResp.Errors)
+	}
+	if ts.members[syncMemberKey(nodeID, firstUserID)] != nil {
+		t.Fatal("expected original user relation to be replaced when external_id rebinding occurs")
+	}
+	rebound := ts.members[syncMemberKey(nodeID, secondUserID)]
+	if rebound == nil || rebound.ExternalID != "rel-001" || rebound.Role != "manager" {
+		t.Fatalf("expected relation rebound to second user, got %+v", rebound)
+	}
+}
+
+func TestSyncMembersFullSyncWithoutExternalIDDeletesByNaturalKey(t *testing.T) {
+	apiMock, ts := newSyncAPIandStore()
+	p := buildSyncPlugin(apiMock, ts, "mapping_only")
+
+	nodeID := model.NewId()
+	userOneID := model.NewId()
+	userTwoID := model.NewId()
+	ts.nodes[syncNodeKey("hr", "dept-1")] = &pluginmodel.OrgNode{
+		ID: nodeID, Name: "Dept 1", Source: "hr", ExternalID: "dept-1", Metadata: "{}",
+	}
+	ts.userMappings[syncMappingKey("hr", "ext-user-001")] = &pluginmodel.UserMapping{Source: "hr", ExternalUserID: "ext-user-001", MmUserID: userOneID}
+	ts.userMappings[syncMappingKey("hr", "ext-user-002")] = &pluginmodel.UserMapping{Source: "hr", ExternalUserID: "ext-user-002", MmUserID: userTwoID}
+
+	fullResp := p.executeSyncRequest(&pluginmodel.SyncRequest{
+		Source:   "hr",
+		SyncType: "full",
+		Members: []pluginmodel.SyncMemberPayload{
+			{NodeExternalID: "dept-1", ExternalUserID: "ext-user-001", Role: "member"},
+			{NodeExternalID: "dept-1", ExternalUserID: "ext-user-002", Role: "member"},
+		},
+	})
+	if fullResp.Status != "success" || fullResp.CreatedMembers != 2 {
+		t.Fatalf("expected first full sync to create two members, got status=%s created=%d errors=%v", fullResp.Status, fullResp.CreatedMembers, fullResp.Errors)
+	}
+
+	secondFullResp := p.executeSyncRequest(&pluginmodel.SyncRequest{
+		Source:   "hr",
+		SyncType: "full",
+		Members: []pluginmodel.SyncMemberPayload{
+			{NodeExternalID: "dept-1", ExternalUserID: "ext-user-001", Role: "member"},
+		},
+	})
+	if secondFullResp.Status != "success" {
+		t.Fatalf("expected second full sync success, got status=%s errors=%v", secondFullResp.Status, secondFullResp.Errors)
+	}
+	if secondFullResp.DeletedMembers != 1 {
+		t.Fatalf("expected one stale natural-key member deleted, got %d", secondFullResp.DeletedMembers)
+	}
+	if ts.members[syncMemberKey(nodeID, userOneID)] == nil {
+		t.Fatal("expected retained natural-key member to survive full sync")
+	}
+	if ts.members[syncMemberKey(nodeID, userTwoID)] != nil {
+		t.Fatal("expected stale natural-key member to be deleted on full sync")
 	}
 }
 

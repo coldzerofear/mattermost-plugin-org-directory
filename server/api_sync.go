@@ -565,6 +565,7 @@ func (p *Plugin) executeSyncRequest(req *pluginmodel.SyncRequest) *pluginmodel.S
 
 	// Process members
 	syncedMemberExtIDs := make([]string, 0, len(req.Members))
+	syncedMemberNodeUserKeys := make([]string, 0, len(req.Members))
 	for i := range req.Members {
 		payload := &req.Members[i]
 		resp.TotalMembers++
@@ -625,6 +626,17 @@ func (p *Plugin) executeSyncRequest(req *pluginmodel.SyncRequest) *pluginmodel.S
 		}
 
 		existing, _ := p.store.GetMemberRole(node.ID, mmUserID)
+		if strings.TrimSpace(payload.ExternalID) != "" {
+			membersAtNode, getErr := p.store.GetAllMembersByNodeID(node.ID)
+			if getErr == nil {
+				for _, candidate := range membersAtNode {
+					if candidate.Source == req.Source && candidate.ExternalID == payload.ExternalID {
+						existing = candidate
+						break
+					}
+				}
+			}
+		}
 		_, err = p.store.UpsertMemberByExternalID(member)
 		if err != nil {
 			resp.Errors = append(resp.Errors, "failed to upsert member: "+err.Error())
@@ -636,6 +648,7 @@ func (p *Plugin) executeSyncRequest(req *pluginmodel.SyncRequest) *pluginmodel.S
 		if payload.ExternalID != "" {
 			syncedMemberExtIDs = append(syncedMemberExtIDs, payload.ExternalID)
 		}
+		syncedMemberNodeUserKeys = append(syncedMemberNodeUserKeys, node.ID+":"+mmUserID)
 	}
 
 	// Full sync: soft-delete stale data from this source
@@ -645,7 +658,7 @@ func (p *Plugin) executeSyncRequest(req *pluginmodel.SyncRequest) *pluginmodel.S
 			resp.DeletedNodes += deleted
 		}
 		if len(req.Members) > 0 {
-			deleted, _ := p.store.SoftDeleteMembersBySource(req.Source, syncedMemberExtIDs)
+			deleted, _ := p.store.SoftDeleteMembersBySource(req.Source, syncedMemberExtIDs, syncedMemberNodeUserKeys)
 			resp.DeletedMembers += deleted
 		}
 	}

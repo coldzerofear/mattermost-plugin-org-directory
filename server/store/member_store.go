@@ -292,6 +292,10 @@ func (s *SQLStore) SoftDeleteMembersByNodeID(nodeID string, now int64) (int, err
 
 // UpsertMemberByExternalID creates or updates a member identified by external_id.
 func (s *SQLStore) UpsertMemberByExternalID(member *pluginmodel.OrgMember) (*pluginmodel.OrgMember, error) {
+	if strings.TrimSpace(member.ExternalID) == "" {
+		return s.UpsertMemberByNodeAndUser(member)
+	}
+
 	var existing pluginmodel.OrgMember
 	err := s.db().QueryRow(`
 		SELECT id, node_id, user_id, role, position, sort_order,
@@ -307,65 +311,146 @@ func (s *SQLStore) UpsertMemberByExternalID(member *pluginmodel.OrgMember) (*plu
 		return nil, err
 	}
 	if err == nil {
-		// Update
+		conflict, conflictErr := s.getActiveMemberByNodeAndUser(member.NodeID, member.UserID)
+		if conflictErr != nil && conflictErr != sql.ErrNoRows {
+			return nil, conflictErr
+		}
+		if conflictErr == nil && conflict != nil && conflict.ID != existing.ID {
+			return nil, fmt.Errorf("member relation conflict for node_id=%s user_id=%s", member.NodeID, member.UserID)
+		}
+
 		now := time.Now().UnixMilli()
 		_, err = s.master().Exec(`
-			UPDATE org_directory_members SET role=$1, position=$2, sort_order=$3, update_at=$4
-			WHERE id=$5`,
-			member.Role, member.Position, member.SortOrder, now, existing.ID)
+			UPDATE org_directory_members
+			SET node_id=$1, user_id=$2, role=$3, position=$4, sort_order=$5, update_at=$6, delete_at=0
+			WHERE id=$7`,
+			member.NodeID, member.UserID, member.Role, member.Position, member.SortOrder, now, existing.ID)
 		if err != nil {
 			return nil, err
 		}
+		existing.NodeID = member.NodeID
+		existing.UserID = member.UserID
 		existing.Role = member.Role
 		existing.Position = member.Position
+		existing.SortOrder = member.SortOrder
+		existing.UpdateAt = now
+		existing.DeleteAt = 0
 		return &existing, nil
 	}
+
+	naturalExisting, naturalErr := s.getActiveMemberByNodeAndUser(member.NodeID, member.UserID)
+	if naturalErr != nil && naturalErr != sql.ErrNoRows {
+		return nil, naturalErr
+	}
+	if naturalErr == nil && naturalExisting != nil {
+		now := time.Now().UnixMilli()
+		_, err = s.master().Exec(`
+			UPDATE org_directory_members
+			SET role=$1, position=$2, sort_order=$3, source=$4, external_id=$5, update_at=$6, delete_at=0
+			WHERE id=$7`,
+			member.Role, member.Position, member.SortOrder, member.Source, member.ExternalID, now, naturalExisting.ID)
+		if err != nil {
+			return nil, err
+		}
+		naturalExisting.Role = member.Role
+		naturalExisting.Position = member.Position
+		naturalExisting.SortOrder = member.SortOrder
+		naturalExisting.Source = member.Source
+		naturalExisting.ExternalID = member.ExternalID
+		naturalExisting.UpdateAt = now
+		naturalExisting.DeleteAt = 0
+		return naturalExisting, nil
+	}
+
 	return s.AddMember(member)
 }
 
 // UpsertMemberByNodeAndUser upserts by (node_id, user_id).
 func (s *SQLStore) UpsertMemberByNodeAndUser(member *pluginmodel.OrgMember) (*pluginmodel.OrgMember, error) {
-	exists, err := s.IsMember(member.NodeID, member.UserID)
-	if err != nil {
+	existing, err := s.getActiveMemberByNodeAndUser(member.NodeID, member.UserID)
+	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
-	if exists {
-		return member, nil
+	if err == nil && existing != nil {
+		now := time.Now().UnixMilli()
+		externalID := existing.ExternalID
+		if strings.TrimSpace(member.ExternalID) != "" {
+			externalID = member.ExternalID
+		}
+		_, updateErr := s.master().Exec(`
+			UPDATE org_directory_members
+			SET role=$1, position=$2, sort_order=$3, source=$4, external_id=$5, update_at=$6, delete_at=0
+			WHERE id=$7`,
+			member.Role, member.Position, member.SortOrder, member.Source, externalID, now, existing.ID)
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		existing.Role = member.Role
+		existing.Position = member.Position
+		existing.SortOrder = member.SortOrder
+		existing.Source = member.Source
+		existing.ExternalID = externalID
+		existing.UpdateAt = now
+		existing.DeleteAt = 0
+		return existing, nil
 	}
 	return s.AddMember(member)
 }
 
 // SoftDeleteMembersBySource soft-deletes members from a source not in the exclude list.
-func (s *SQLStore) SoftDeleteMembersBySource(source string, excludeExternalIDs []string) (int, error) {
-	if len(excludeExternalIDs) == 0 {
-		res, err := s.master().Exec(`
-			UPDATE org_directory_members SET delete_at=$1, update_at=$1
-			WHERE source=$2 AND delete_at=0`, time.Now().UnixMilli(), source)
-		if err != nil {
-			return 0, err
+func (s *SQLStore) SoftDeleteMembersBySource(source string, excludeExternalIDs []string, excludeNodeUserKeys []string) (int, error) {
+	now := time.Now().UnixMilli()
+	clauses := []string{"source=$2", "delete_at=0"}
+	args := []interface{}{now, source}
+	placeholderIndex := 3
+
+	if len(excludeExternalIDs) > 0 {
+		placeholders := make([]string, len(excludeExternalIDs))
+		for i, id := range excludeExternalIDs {
+			placeholders[i] = fmt.Sprintf("$%d", placeholderIndex)
+			args = append(args, id)
+			placeholderIndex++
 		}
-		n, _ := res.RowsAffected()
-		return int(n), nil
+		clauses = append(clauses, fmt.Sprintf("(external_id = '' OR external_id NOT IN (%s))", strings.Join(placeholders, ",")))
 	}
 
-	placeholders := make([]string, len(excludeExternalIDs))
-	args := make([]interface{}, len(excludeExternalIDs)+2)
-	args[0] = time.Now().UnixMilli()
-	args[1] = source
-	for i, id := range excludeExternalIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+3)
-		args[i+2] = id
+	if len(excludeNodeUserKeys) > 0 {
+		placeholders := make([]string, len(excludeNodeUserKeys))
+		for i, key := range excludeNodeUserKeys {
+			placeholders[i] = fmt.Sprintf("$%d", placeholderIndex)
+			args = append(args, key)
+			placeholderIndex++
+		}
+		clauses = append(clauses, fmt.Sprintf("(node_id || ':' || user_id) NOT IN (%s)", strings.Join(placeholders, ",")))
 	}
+
 	query := fmt.Sprintf(`
 		UPDATE org_directory_members SET delete_at=$1, update_at=$1
-		WHERE source=$2 AND delete_at=0 AND external_id NOT IN (%s)`,
-		strings.Join(placeholders, ","))
+		WHERE %s`, strings.Join(clauses, " AND "))
 	res, err := s.master().Exec(query, args...)
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+func (s *SQLStore) getActiveMemberByNodeAndUser(nodeID, userID string) (*pluginmodel.OrgMember, error) {
+	member := &pluginmodel.OrgMember{}
+	err := s.db().QueryRow(`
+		SELECT id, node_id, user_id, role, position, sort_order,
+		       source, external_id, create_at, update_at, delete_at
+		FROM org_directory_members
+		WHERE node_id=$1 AND user_id=$2 AND delete_at=0`,
+		nodeID, userID).Scan(
+		&member.ID, &member.NodeID, &member.UserID, &member.Role,
+		&member.Position, &member.SortOrder, &member.Source, &member.ExternalID,
+		&member.CreateAt, &member.UpdateAt, &member.DeleteAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return member, nil
 }
 
 // --- helpers ---

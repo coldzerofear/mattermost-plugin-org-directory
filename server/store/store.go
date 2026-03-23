@@ -54,7 +54,7 @@ type MemberStore interface {
 	// External sync
 	UpsertMemberByExternalID(member *pluginmodel.OrgMember) (*pluginmodel.OrgMember, error)
 	UpsertMemberByNodeAndUser(member *pluginmodel.OrgMember) (*pluginmodel.OrgMember, error)
-	SoftDeleteMembersBySource(source string, excludeExternalIDs []string) (int, error)
+	SoftDeleteMembersBySource(source string, excludeExternalIDs []string, excludeNodeUserKeys []string) (int, error)
 }
 
 // UserMappingStore defines operations on external user mappings.
