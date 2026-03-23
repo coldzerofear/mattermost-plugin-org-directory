@@ -169,13 +169,82 @@ func (p *Plugin) handleListSyncNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	parseNonNegativeInt := func(name string) (int, bool, error) {
+		value := strings.TrimSpace(r.URL.Query().Get(name))
+		if value == "" {
+			return -1, false, nil
+		}
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 {
+			return -1, true, err
+		}
+		return parsed, true, nil
+	}
+
+	depth, hasDepth, err := parseNonNegativeInt("depth")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "depth must be a non-negative integer")
+		return
+	}
+
+	maxDepth, hasMaxDepth, err := parseNonNegativeInt("max_depth")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "max_depth must be a non-negative integer")
+		return
+	}
+
+	parentExternalID := strings.TrimSpace(r.URL.Query().Get("parent_external_id"))
+
 	nodes, err := p.store.GetNodesBySource(source)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get nodes")
 		return
 	}
 
-	responseNodes := p.buildSyncNodeDTOs(nodes)
+	filteredNodes := make([]*pluginmodel.OrgNode, 0, len(nodes))
+
+	var parentNode *pluginmodel.OrgNode
+	if parentExternalID != "" {
+		parentNode, err = p.store.GetNodeByExternalID(source, parentExternalID)
+		if err != nil || parentNode == nil {
+			writeError(w, http.StatusNotFound, "parent node not found")
+			return
+		}
+	}
+
+	for _, node := range nodes {
+		if parentNode != nil {
+			if node.ID == parentNode.ID {
+				continue
+			}
+			prefix := parentNode.Path + "/"
+			if !strings.HasPrefix(node.Path, prefix) {
+				continue
+			}
+			relativeDepth := node.Depth - parentNode.Depth - 1
+			if relativeDepth < 0 {
+				continue
+			}
+			if hasDepth && relativeDepth != depth {
+				continue
+			}
+			if hasMaxDepth && relativeDepth > maxDepth {
+				continue
+			}
+			filteredNodes = append(filteredNodes, node)
+			continue
+		}
+
+		if hasDepth && node.Depth != depth {
+			continue
+		}
+		if hasMaxDepth && node.Depth > maxDepth {
+			continue
+		}
+		filteredNodes = append(filteredNodes, node)
+	}
+
+	responseNodes := p.buildSyncNodeDTOs(filteredNodes)
 	writeJSON(w, http.StatusOK, &pluginmodel.SyncNodeListResponse{
 		Source: source,
 		Nodes:  responseNodes,

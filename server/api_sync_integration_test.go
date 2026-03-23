@@ -739,6 +739,16 @@ func TestHandleListSyncNodes(t *testing.T) {
 		ExternalID: "child",
 		Metadata:   "{}",
 	}
+	ts.nodes[syncNodeKey("hr", "leaf")] = &pluginmodel.OrgNode{
+		ID:         "node-leaf",
+		Name:       "Leaf",
+		ParentID:   "node-child",
+		Path:       "/node-root/node-child/node-leaf",
+		Depth:      2,
+		Source:     "hr",
+		ExternalID: "leaf",
+		Metadata:   "{}",
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sync/nodes?source=hr", nil)
 	req.Header.Set("Authorization", "Bearer sync-token")
@@ -758,11 +768,131 @@ func TestHandleListSyncNodes(t *testing.T) {
 	if resp.Source != "hr" {
 		t.Fatalf("expected source hr, got %q", resp.Source)
 	}
-	if len(resp.Nodes) != 2 {
-		t.Fatalf("expected 2 nodes, got %d", len(resp.Nodes))
+	if len(resp.Nodes) != 3 {
+		t.Fatalf("expected 3 nodes, got %d", len(resp.Nodes))
 	}
 	if resp.Nodes[1].ParentExternalID != "root" {
 		t.Fatalf("expected child parent external id root, got %q", resp.Nodes[1].ParentExternalID)
+	}
+}
+
+func TestHandleListSyncNodesWithDepthFilter(t *testing.T) {
+	apiMock, ts := newSyncAPIandStore()
+	p := buildSyncPlugin(apiMock, ts, "mapping_email_username")
+	p.initializeAPI()
+
+	ts.nodes[syncNodeKey("hr", "root")] = &pluginmodel.OrgNode{
+		ID:         "node-root",
+		Name:       "Root",
+		Path:       "/node-root",
+		Depth:      0,
+		Source:     "hr",
+		ExternalID: "root",
+		Metadata:   "{}",
+	}
+	ts.nodes[syncNodeKey("hr", "child-a")] = &pluginmodel.OrgNode{
+		ID:         "node-child-a",
+		Name:       "ChildA",
+		ParentID:   "node-root",
+		Path:       "/node-root/node-child-a",
+		Depth:      1,
+		Source:     "hr",
+		ExternalID: "child-a",
+		Metadata:   "{}",
+	}
+	ts.nodes[syncNodeKey("hr", "child-b")] = &pluginmodel.OrgNode{
+		ID:         "node-child-b",
+		Name:       "ChildB",
+		ParentID:   "node-root",
+		Path:       "/node-root/node-child-b",
+		Depth:      1,
+		Source:     "hr",
+		ExternalID: "child-b",
+		Metadata:   "{}",
+	}
+	ts.nodes[syncNodeKey("hr", "leaf")] = &pluginmodel.OrgNode{
+		ID:         "node-leaf",
+		Name:       "Leaf",
+		ParentID:   "node-child-a",
+		Path:       "/node-root/node-child-a/node-leaf",
+		Depth:      2,
+		Source:     "hr",
+		ExternalID: "leaf",
+		Metadata:   "{}",
+	}
+
+	testCases := []struct {
+		name         string
+		path         string
+		expectCount  int
+		expectDepths []int
+		expectExtIDs []string
+	}{
+		{
+			name:         "exact root depth",
+			path:         "/api/v1/sync/nodes?source=hr&depth=0",
+			expectCount:  1,
+			expectDepths: []int{0},
+			expectExtIDs: []string{"root"},
+		},
+		{
+			name:         "exact first depth",
+			path:         "/api/v1/sync/nodes?source=hr&depth=1",
+			expectCount:  2,
+			expectDepths: []int{1, 1},
+			expectExtIDs: []string{"child-a", "child-b"},
+		},
+		{
+			name:         "max depth cumulative",
+			path:         "/api/v1/sync/nodes?source=hr&max_depth=1",
+			expectCount:  3,
+			expectDepths: []int{0, 1, 1},
+			expectExtIDs: []string{"root", "child-a", "child-b"},
+		},
+		{
+			name:         "parent relative exact depth",
+			path:         "/api/v1/sync/nodes?source=hr&parent_external_id=root&depth=0",
+			expectCount:  2,
+			expectDepths: []int{1, 1},
+			expectExtIDs: []string{"child-a", "child-b"},
+		},
+		{
+			name:         "parent relative max depth",
+			path:         "/api/v1/sync/nodes?source=hr&parent_external_id=root&max_depth=1",
+			expectCount:  3,
+			expectDepths: []int{1, 1, 2},
+			expectExtIDs: []string{"child-a", "child-b", "leaf"},
+		},
+	}
+
+	p.configuration = &configuration{SyncAPIToken: "sync-token"}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			req.Header.Set("Authorization", "Bearer sync-token")
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(nil, rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+			}
+
+			var resp pluginmodel.SyncNodeListResponse
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+			if len(resp.Nodes) != tc.expectCount {
+				t.Fatalf("expected %d nodes, got %d", tc.expectCount, len(resp.Nodes))
+			}
+			for idx, node := range resp.Nodes {
+				if node.Depth != tc.expectDepths[idx] {
+					t.Fatalf("expected node depth %d, got %d", tc.expectDepths[idx], node.Depth)
+				}
+				if node.ExternalID != tc.expectExtIDs[idx] {
+					t.Fatalf("expected external id %s, got %s", tc.expectExtIDs[idx], node.ExternalID)
+				}
+			}
+		})
 	}
 }
 
