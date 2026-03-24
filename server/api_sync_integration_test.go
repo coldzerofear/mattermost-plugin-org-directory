@@ -377,10 +377,10 @@ func (s *syncTestStore) GetSyncLog(id string) (*pluginmodel.SyncLog, error) {
 	panic("not implemented in sync test store")
 }
 func (s *syncTestStore) GetSyncLogs(source string, page, perPage int) ([]*pluginmodel.SyncLog, error) {
-	panic("not implemented in sync test store")
+	return []*pluginmodel.SyncLog{}, nil
 }
 func (s *syncTestStore) GetLatestSyncLog(source string) (*pluginmodel.SyncLog, error) {
-	panic("not implemented in sync test store")
+	return nil, nil
 }
 
 // --- AuditStore ---
@@ -1238,5 +1238,88 @@ func TestHandleGetSyncUserNodes(t *testing.T) {
 	}
 	if resp.Nodes[1].ParentExternalID != "root" {
 		t.Fatalf("expected child parent external id root, got %q", resp.Nodes[1].ParentExternalID)
+	}
+}
+
+func TestSyncAccessWithoutTokenFallback(t *testing.T) {
+	testCases := []struct {
+		name           string
+		method         string
+		path           string
+		userID         string
+		userRoles      string
+		expectedStatus int
+	}{
+		{
+			name:           "anonymous user cannot access query route",
+			method:         http.MethodGet,
+			path:           "/api/v1/sync/nodes?source=hr",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:           "authenticated normal user can access safe sync query route",
+			method:         http.MethodGet,
+			path:           "/api/v1/sync/nodes?source=hr",
+			userID:         "user-normal",
+			userRoles:      model.SystemUserRoleId,
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "authenticated normal user cannot access sensitive logs route",
+			method:         http.MethodGet,
+			path:           "/api/v1/sync/logs",
+			userID:         "user-normal",
+			userRoles:      model.SystemUserRoleId,
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "authenticated normal user cannot access sync write route",
+			method:         http.MethodPost,
+			path:           "/api/v1/sync/members",
+			userID:         "user-normal",
+			userRoles:      model.SystemUserRoleId,
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "admin user can access sync write route without plugin token",
+			method:         http.MethodPost,
+			path:           "/api/v1/sync/members",
+			userID:         "user-admin",
+			userRoles:      model.SystemAdminRoleId,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "admin user can access sensitive sync get route without plugin token",
+			method:         http.MethodGet,
+			path:           "/api/v1/sync/logs",
+			userID:         "user-admin",
+			userRoles:      model.SystemAdminRoleId,
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			apiMock, ts := newSyncAPIandStore()
+			p := buildSyncPlugin(apiMock, ts, "mapping_only")
+			p.initializeAPI()
+			p.configuration = &configuration{}
+
+			if tc.userID != "" {
+				apiMock.On("GetUser", tc.userID).Return(&model.User{Id: tc.userID, Roles: tc.userRoles}, (*model.AppError)(nil)).Maybe()
+			}
+
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			if tc.userID != "" {
+				req.Header.Set("Mattermost-User-Id", tc.userID)
+			}
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(nil, rec, req)
+
+			if rec.Code != tc.expectedStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tc.expectedStatus, rec.Code, rec.Body.String())
+			}
+
+		})
 	}
 }

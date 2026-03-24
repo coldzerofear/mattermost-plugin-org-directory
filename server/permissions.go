@@ -36,31 +36,66 @@ func (p *Plugin) checkAdmin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// checkSyncToken is a middleware that validates the external sync Bearer token.
+// checkSyncToken validates sync API access.
+//
+// Rules:
+// 1. If SyncAPIToken is configured, all sync routes require the configured Bearer token.
+// 2. If SyncAPIToken is not configured:
+//   - Any authenticated Mattermost user may call safe sync GET query routes.
+//   - Only system administrators may call write routes and sensitive GET routes.
 func (p *Plugin) checkSyncToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-		token = strings.TrimSpace(token)
-
-		if token == "" {
-			http.Error(w, `{"error":"missing authorization token"}`, http.StatusUnauthorized)
-			return
-		}
-
 		config := p.getConfiguration()
-		if config.SyncAPIToken == "" {
-			http.Error(w, `{"error":"sync API not configured"}`, http.StatusServiceUnavailable)
+		if strings.TrimSpace(config.SyncAPIToken) != "" {
+			authHeader := r.Header.Get("Authorization")
+			token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+			if token == "" {
+				http.Error(w, `{"error":"missing authorization token"}`, http.StatusUnauthorized)
+				return
+			}
+			if subtle.ConstantTimeCompare([]byte(token), []byte(config.SyncAPIToken)) != 1 {
+				http.Error(w, `{"error":"invalid sync token"}`, http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
 			return
 		}
 
-		if subtle.ConstantTimeCompare([]byte(token), []byte(config.SyncAPIToken)) != 1 {
-			http.Error(w, `{"error":"invalid sync token"}`, http.StatusUnauthorized)
+		userID := strings.TrimSpace(r.Header.Get("Mattermost-User-Id"))
+		if userID == "" {
+			http.Error(w, `{"error":"not authenticated"}`, http.StatusUnauthorized)
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		if p.canAccessSyncWithoutToken(userID, r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		http.Error(w, `{"error":"requires system admin"}`, http.StatusForbidden)
 	})
+}
+
+func (p *Plugin) canAccessSyncWithoutToken(userID string, r *http.Request) bool {
+	if p.isSystemAdmin(userID) {
+		return true
+	}
+
+	if r.Method != http.MethodGet {
+		return false
+	}
+
+	path := r.URL.Path
+	switch {
+	case path == "/api/v1/sync/nodes":
+		return true
+	case strings.HasPrefix(path, "/api/v1/sync/nodes/"):
+		return true
+	case strings.HasPrefix(path, "/api/v1/sync/users/") && strings.HasSuffix(path, "/nodes"):
+		return true
+	default:
+		return false
+	}
 }
 
 // checkNodePermission verifies that a user has at least the required role for a node

@@ -52,21 +52,37 @@ https://<your-mattermost-host>/plugins/com.example.org-directory/api/v1/sync
 
 ## 2. 认证方式
 
-同步 API 使用 **Bearer Token** 认证，与 Mattermost 用户会话完全独立。
+同步 API 支持两种鉴权模式：
 
-每个请求的 `Authorization` 请求头中携带 Token：
+### 2.1 配置了 Sync API Token（推荐）
+
+当插件配置了 **外部同步 API Token** 时，所有 `/api/v1/sync/*` 请求都必须使用 Bearer Token 鉴权，与 Mattermost 用户会话独立。
 
 ```http
 Authorization: Bearer <your-sync-api-token>
 Content-Type: application/json
 ```
 
+### 2.2 未配置 Sync API Token（回退模式）
+
+当插件未配置 **外部同步 API Token** 时，权限按 Mattermost 登录用户分级：
+
+- **普通已登录 Mattermost 用户**：只能访问通讯录查询类 GET 接口
+  - `GET /api/v1/sync/nodes`
+  - `GET /api/v1/sync/nodes/{external_id}`
+  - `GET /api/v1/sync/nodes/{external_id}/children`
+  - `GET /api/v1/sync/nodes/{external_id}/members`
+  - `GET /api/v1/sync/users/{external_user_id}/nodes`
+- **系统管理员**：可访问全部 `/api/v1/sync/*` 接口，包括写接口、日志接口、映射接口
+
+> 注意：`GET /api/v1/sync/logs`、`GET /api/v1/sync/logs/{id}`、`GET /api/v1/sync/user-mappings/{source}` 在未配置 Token 时仍仅限系统管理员访问。
+
 **错误响应：**
 
 | HTTP 状态码 | 原因 |
 |------------|------|
-| `401 Unauthorized` | Token 缺失或无效 |
-| `503 Service Unavailable` | 插件未配置 Sync API Token |
+| `401 Unauthorized` | 未提供有效 Sync Token，且请求也不是合法 Mattermost 登录用户 |
+| `403 Forbidden` | 已登录用户缺少访问当前 sync 路由的权限 |
 
 ---
 

@@ -55,7 +55,8 @@
                 "key": "SyncAPIToken",
                 "display_name": "外部同步 API Token:",
                 "type": "text",
-                "help_text": "外部系统调用同步 API 时使用的鉴权 Token。留空则禁用同步 API。请使用足够长度的随机字符串（建议 32 位以上）。",
+                "help_text": "外部系统调用同步 API 时使用的鉴权 Token。配置后所有 /api/v1/sync/* 路由都要求该 Token；留空时，普通已登录 Mattermost 用户仅可访问通讯录查询类 GET 接口，系统管理员可访问全部同步接口。建议生产环境配置独立 Token。",
+
                 "placeholder": "",
                 "default": "",
                 "secret": true
