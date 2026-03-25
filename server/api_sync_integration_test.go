@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -1321,5 +1322,41 @@ func TestSyncAccessWithoutTokenFallback(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+func TestHandleGetMembersUsesConfiguredDefaultPageSize(t *testing.T) {
+	apiMock, ts := newSyncAPIandStore()
+	p := buildSyncPlugin(apiMock, ts, "mapping_only")
+	p.initializeAPI()
+	p.configuration = &configuration{DefaultPageSize: "10"}
+
+	nodeID := "node-members"
+	for i := 0; i < 25; i++ {
+		userID := fmt.Sprintf("user-%02d", i)
+		ts.members[syncMemberKey(nodeID, userID)] = &pluginmodel.OrgMember{
+			ID:     model.NewId(),
+			NodeID: nodeID,
+			UserID: userID,
+			Source: "local",
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+nodeID+"/members", nil)
+	req.Header.Set("Mattermost-User-Id", "viewer")
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(nil, rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var members []*pluginmodel.OrgMemberWithUser
+	if err := json.NewDecoder(rec.Body).Decode(&members); err != nil {
+		t.Fatalf("failed to decode members response: %v", err)
+	}
+	if len(members) != 10 {
+		t.Fatalf("expected 10 members from configured default page size, got %d", len(members))
 	}
 }

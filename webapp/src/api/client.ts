@@ -31,6 +31,19 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     return res.json() as Promise<T>;
 }
 
+function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
+    const searchParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === '') {
+            return;
+        }
+        searchParams.set(key, String(value));
+    });
+
+    const query = searchParams.toString();
+    return query ? `?${query}` : '';
+}
+
 export const OrgDirectoryAPI = {
     // Tree
     getFullTree: (depth?: number): Promise<OrgTreeNode[]> =>
@@ -71,8 +84,8 @@ export const OrgDirectoryAPI = {
         request('GET', `/nodes/${id}/stats?recursive=${recursive}`),
 
     // Members
-    getMembers: (nodeId: string, page = 0, perPage = 50): Promise<OrgMember[]> =>
-        request('GET', `/nodes/${nodeId}/members?page=${page}&per_page=${perPage}`),
+    getMembers: (nodeId: string, page = 0, perPage?: number): Promise<OrgMember[]> =>
+        request('GET', `/nodes/${nodeId}/members${buildQuery({page, per_page: perPage})}`),
 
     addMember: (nodeId: string, data: {user_id: string; role?: string; position?: string}): Promise<OrgMember> =>
         request('POST', `/nodes/${nodeId}/members`, data),
@@ -87,8 +100,8 @@ export const OrgDirectoryAPI = {
         request('PUT', `/nodes/${nodeId}/members/${userId}/position`, {position}),
 
     // Search
-    searchUsers: (query: string, page = 0, perPage = 20): Promise<SearchResult[]> =>
-        request('GET', `/search/users?q=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}`),
+    searchUsers: (query: string, page = 0, perPage?: number): Promise<SearchResult[]> =>
+        request('GET', `/search/users${buildQuery({q: query, page, per_page: perPage})}`),
 
     searchNodes: (query: string): Promise<OrgNode[]> =>
         request('GET', `/search/nodes?q=${encodeURIComponent(query)}`),
@@ -98,13 +111,13 @@ export const OrgDirectoryAPI = {
         request('GET', `/users/${userId}/nodes`),
 
     // Sync logs (admin — uses session auth, not sync token)
-    getSyncLogs: (source = '', page = 0, perPage = 20): Promise<SyncLog[]> =>
-        request('GET', `/admin/sync/logs?source=${encodeURIComponent(source)}&page=${page}&per_page=${perPage}`),
+    getSyncLogs: (source = '', page = 0, perPage?: number): Promise<SyncLog[]> =>
+        request('GET', `/admin/sync/logs${buildQuery({source, page, per_page: perPage})}`),
 
     getSyncLog: (id: string): Promise<SyncLog> =>
         request('GET', `/admin/sync/logs/${id}`),
 
     // User mappings (admin — uses session auth, not sync token)
-    getUserMappings: (source: string, page = 0, perPage = 50): Promise<UserMapping[]> =>
-        request('GET', `/admin/sync/user-mappings/${encodeURIComponent(source)}?page=${page}&per_page=${perPage}`),
+    getUserMappings: (source: string, page = 0, perPage?: number): Promise<UserMapping[]> =>
+        request('GET', `/admin/sync/user-mappings/${encodeURIComponent(source)}${buildQuery({page, per_page: perPage})}`),
 };

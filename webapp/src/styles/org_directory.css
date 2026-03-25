@@ -3,6 +3,18 @@
 .org-directory-sidebar {
     font-size: 14px;
     line-height: 1.5;
+    min-height: 0;
+}
+
+.org-directory-content {
+    min-height: 0;
+}
+
+.org-directory-admin-bar {
+    position: sticky;
+    bottom: 0;
+    background: var(--center-channel-bg, #fff);
+    z-index: 1;
 }
 
 .org-directory-header {

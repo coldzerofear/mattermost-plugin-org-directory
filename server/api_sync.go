@@ -119,7 +119,7 @@ func (p *Plugin) handleGetUserMappings(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
 	if perPage <= 0 {
-		perPage = 50
+		perPage = p.getConfiguration().getDefaultPageSize()
 	}
 
 	mappings, err := p.store.GetUserMappingsBySource(source, page, perPage)
@@ -137,7 +137,7 @@ func (p *Plugin) handleGetSyncLogs(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
 	if perPage <= 0 {
-		perPage = 20
+		perPage = p.getConfiguration().getDefaultPageSize()
 	}
 
 	logs, err := p.store.GetSyncLogs(source, page, perPage)
@@ -332,7 +332,7 @@ func (p *Plugin) handleGetSyncNodeMembers(w http.ResponseWriter, r *http.Request
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
 	if perPage <= 0 {
-		perPage = 50
+		perPage = p.getConfiguration().getDefaultPageSize()
 	}
 	recursive, _ := strconv.ParseBool(r.URL.Query().Get("recursive"))
 

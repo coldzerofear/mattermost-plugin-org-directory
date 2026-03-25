@@ -27,7 +27,7 @@ func (p *Plugin) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
 	if perPage <= 0 {
-		perPage = 20
+		perPage = p.getConfiguration().getDefaultPageSize()
 	}
 
 	results, err := p.store.SearchMembers(q, page, perPage)

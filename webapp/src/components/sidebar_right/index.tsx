@@ -165,6 +165,7 @@ const SidebarRight: React.FC<SidebarRightProps> = ({currentUserId, isAdmin, plug
                 display: 'flex',
                 flexDirection: 'column',
                 height: '100%',
+                minHeight: 0,
                 padding: '12px',
                 boxSizing: 'border-box',
                 position: 'relative',
@@ -256,7 +257,14 @@ const SidebarRight: React.FC<SidebarRightProps> = ({currentUserId, isAdmin, plug
                     </div>
 
                     {/* Content area */}
-                    <div style={{flex: 1, overflowY: 'auto'}}>
+                    <div
+                        className='org-directory-content'
+                        style={{
+                            flex: 1,
+                            minHeight: 0,
+                            overflowY: 'auto',
+                        }}
+                    >
                         {isLoading || isSearching ? (
                             <Loading/>
                         ) : viewMode === 'search' ? (
@@ -290,6 +298,7 @@ const SidebarRight: React.FC<SidebarRightProps> = ({currentUserId, isAdmin, plug
                                 marginTop: '8px',
                                 display: 'flex',
                                 gap: '8px',
+                                flexShrink: 0,
                             }}
                         >
                             <button

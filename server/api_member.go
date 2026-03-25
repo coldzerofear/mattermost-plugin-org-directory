@@ -16,7 +16,7 @@ func (p *Plugin) handleGetMembers(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
 	if perPage <= 0 {
-		perPage = 50
+		perPage = p.getConfiguration().getDefaultPageSize()
 	}
 
 	members, err := p.store.GetMembers(id, page, perPage)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strconv"
 
 	"github.com/pkg/errors"
 )
@@ -100,4 +101,17 @@ func (c *configuration) setDefaultsIfEmpty() {
 		c.SyncProtectLocalData = true
 		c.SyncFullDeleteStrategy = "cascade_delete"
 	}
+}
+
+func (c *configuration) getDefaultPageSize() int {
+	if c == nil {
+		return 50
+	}
+
+	pageSize, err := strconv.Atoi(c.DefaultPageSize)
+	if err != nil || pageSize <= 0 {
+		return 50
+	}
+
+	return pageSize
 }
