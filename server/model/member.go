@@ -18,13 +18,14 @@ type OrgMember struct {
 // OrgMemberWithUser combines member data with Mattermost user info.
 type OrgMemberWithUser struct {
 	*OrgMember
-	Username   string `json:"username"`
-	FirstName  string `json:"first_name"`
-	LastName   string `json:"last_name"`
-	Nickname   string `json:"nickname"`
-	Email      string `json:"email"`
-	MmPosition string `json:"mm_position"` // Mattermost native position field
-	Status     string `json:"status"`      // online status
+	Username         string `json:"username"`
+	FirstName        string `json:"first_name"`
+	LastName         string `json:"last_name"`
+	Nickname         string `json:"nickname"`
+	Email            string `json:"email"`
+	MmPosition       string `json:"mm_position"`        // Mattermost native position field
+	Status           string `json:"status"`             // online status
+	LastPictureUpdate int64 `json:"last_picture_update"` // user avatar update time
 }
 
 // SearchResult represents a user search result with node context.

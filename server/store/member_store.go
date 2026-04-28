@@ -80,7 +80,8 @@ func (s *SQLStore) GetMembers(nodeID string, page, perPage int) ([]*pluginmodel.
 		SELECT m.id, m.node_id, m.user_id, m.role, m.position, m.sort_order,
 		       m.source, m.external_id, m.create_at, m.update_at, m.delete_at,
 		       COALESCE(u.username,''), COALESCE(u.firstname,''), COALESCE(u.lastname,''),
-		       COALESCE(u.nickname,''), COALESCE(u.email,''), COALESCE(u.position,'')
+		       COALESCE(u.nickname,''), COALESCE(u.email,''), COALESCE(u.position,''),
+		       COALESCE(u.lastpictureupdate,0)
 		FROM org_directory_members m
 		JOIN users u ON m.user_id = u.id
 		WHERE m.node_id=$1 AND m.delete_at=0 AND u.deleteat=0
@@ -119,7 +120,8 @@ func (s *SQLStore) GetMembersForNodes(nodeIDs []string, page, perPage int) ([]*p
 		SELECT m.id, m.node_id, m.user_id, m.role, m.position, m.sort_order,
 		       m.source, m.external_id, m.create_at, m.update_at, m.delete_at,
 		       COALESCE(u.username,''), COALESCE(u.firstname,''), COALESCE(u.lastname,''),
-		       COALESCE(u.nickname,''), COALESCE(u.email,''), COALESCE(u.position,'')
+		       COALESCE(u.nickname,''), COALESCE(u.email,''), COALESCE(u.position,''),
+		       COALESCE(u.lastpictureupdate,0)
 		FROM org_directory_members m
 		JOIN users u ON m.user_id = u.id
 		WHERE m.node_id IN (%s) AND m.delete_at=0 AND u.deleteat=0
@@ -193,6 +195,7 @@ func (s *SQLStore) SearchMembers(query string, page, perPage int) ([]*pluginmode
 		       m.source, m.external_id, m.create_at, m.update_at, m.delete_at,
 		       COALESCE(u.username,''), COALESCE(u.firstname,''), COALESCE(u.lastname,''),
 		       COALESCE(u.nickname,''), COALESCE(u.email,''), COALESCE(u.position,''),
+		       COALESCE(u.lastpictureupdate,0),
 		       n.name AS node_name, n.path AS node_path
 		FROM users u
 		JOIN org_directory_members m ON u.id = m.user_id
@@ -221,6 +224,7 @@ func (s *SQLStore) SearchMembers(query string, page, perPage int) ([]*pluginmode
 			&m.ID, &m.NodeID, &m.UserID, &m.Role, &m.Position, &m.SortOrder,
 			&m.Source, &m.ExternalID, &m.CreateAt, &m.UpdateAt, &m.DeleteAt,
 			&wu.Username, &wu.FirstName, &wu.LastName, &wu.Nickname, &wu.Email, &wu.MmPosition,
+			&wu.LastPictureUpdate,
 			&nodeName, &nodePath,
 		)
 		if err != nil {
@@ -464,6 +468,7 @@ func scanMembersWithUser(rows *sql.Rows) ([]*pluginmodel.OrgMemberWithUser, erro
 			&m.ID, &m.NodeID, &m.UserID, &m.Role, &m.Position, &m.SortOrder,
 			&m.Source, &m.ExternalID, &m.CreateAt, &m.UpdateAt, &m.DeleteAt,
 			&wu.Username, &wu.FirstName, &wu.LastName, &wu.Nickname, &wu.Email, &wu.MmPosition,
+			&wu.LastPictureUpdate,
 		)
 		if err != nil {
 			return nil, err
