@@ -471,9 +471,45 @@ func (p *Plugin) buildSyncNodeDTOs(nodes []*pluginmodel.OrgNode) []*pluginmodel.
 		return sortedNodes[i].Name < sortedNodes[j].Name
 	})
 
+	nodesByID := make(map[string]*pluginmodel.OrgNode, len(sortedNodes))
+	for _, node := range sortedNodes {
+		nodesByID[node.ID] = node
+	}
+
+	parentExternalIDByParentID := map[string]string{}
+	unresolvedParentIDs := map[string]struct{}{}
+	for _, node := range sortedNodes {
+		if node.ParentID == "" {
+			continue
+		}
+
+		if _, ok := parentExternalIDByParentID[node.ParentID]; ok {
+			continue
+		}
+
+		if parentNode, ok := nodesByID[node.ParentID]; ok {
+			parentExternalIDByParentID[node.ParentID] = parentNode.ExternalID
+			continue
+		}
+
+		unresolvedParentIDs[node.ParentID] = struct{}{}
+	}
+
+	for parentID := range unresolvedParentIDs {
+		parentNode, err := p.store.GetNode(parentID)
+		if err != nil || parentNode == nil {
+			continue
+		}
+		parentExternalIDByParentID[parentID] = parentNode.ExternalID
+	}
+
 	result := make([]*pluginmodel.SyncNodeDTO, 0, len(sortedNodes))
 	for _, node := range sortedNodes {
-		result = append(result, p.buildSyncNodeDTO(node))
+		dto := &pluginmodel.SyncNodeDTO{OrgNode: node}
+		if node.ParentID != "" {
+			dto.ParentExternalID = parentExternalIDByParentID[node.ParentID]
+		}
+		result = append(result, dto)
 	}
 	return result
 }

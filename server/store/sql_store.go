@@ -61,6 +61,7 @@ func (s *SQLStore) migrate() error {
 	}{
 		{1, s.migrationV1CreateTables()},
 		{2, s.migrationV2AddIndexes()},
+		{3, s.migrationV3AddSyncQueryIndexes()},
 	}
 
 	currentVersion := s.getSchemaVersion()
@@ -189,6 +190,14 @@ CREATE INDEX IF NOT EXISTS idx_sync_logs_time ON org_directory_sync_logs(started
 CREATE INDEX IF NOT EXISTS idx_org_audit_actor ON org_directory_audit_log(actor_id);
 CREATE INDEX IF NOT EXISTS idx_org_audit_target ON org_directory_audit_log(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_org_audit_time ON org_directory_audit_log(create_at);
+`
+}
+
+// migrationV3AddSyncQueryIndexes returns additional indexes for sync query APIs.
+func (s *SQLStore) migrationV3AddSyncQueryIndexes() string {
+	return `
+CREATE INDEX IF NOT EXISTS idx_org_nodes_source_delete_depth_sort_name ON org_directory_nodes(source, delete_at, depth, sort_order, name);
+CREATE INDEX IF NOT EXISTS idx_org_nodes_source_external_delete ON org_directory_nodes(source, external_id, delete_at);
 `
 }
 
