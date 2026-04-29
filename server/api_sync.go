@@ -244,7 +244,10 @@ func (p *Plugin) handleListSyncNodes(w http.ResponseWriter, r *http.Request) {
 		filteredNodes = append(filteredNodes, node)
 	}
 
-	responseNodes := p.buildSyncNodeDTOs(filteredNodes)
+	// Pass the full unfiltered `nodes` set as the parent-resolution pool so that
+	// parents excluded by depth/parent_external_id filters are still resolved
+	// in memory — avoids per-parent GetNode calls in buildSyncNodeDTOs.
+	responseNodes := p.buildSyncNodeDTOsWithPool(filteredNodes, nodes)
 	writeJSON(w, http.StatusOK, &pluginmodel.SyncNodeListResponse{
 		Source: source,
 		Nodes:  responseNodes,
@@ -453,32 +456,41 @@ func (p *Plugin) buildSyncNodeDTO(node *pluginmodel.OrgNode) *pluginmodel.SyncNo
 }
 
 func (p *Plugin) buildSyncNodeDTOs(nodes []*pluginmodel.OrgNode) []*pluginmodel.SyncNodeDTO {
+	return p.buildSyncNodeDTOsWithPool(nodes, nodes)
+}
+
+// buildSyncNodeDTOsWithPool resolves each ParentID -> ParentExternalID using
+// `pool` first (no DB hit) and falls back to a single GetNode per unique
+// unresolved ParentID. Callers that already have a larger in-memory corpus
+// (e.g. the full source-set) should pass it as `pool` to avoid N+1 lookups
+// when `nodes` is a filtered subset. Sorts `nodes` in place — callers must
+// not retain insertion order after this call.
+func (p *Plugin) buildSyncNodeDTOsWithPool(nodes []*pluginmodel.OrgNode, pool []*pluginmodel.OrgNode) []*pluginmodel.SyncNodeDTO {
 	if len(nodes) == 0 {
 		return []*pluginmodel.SyncNodeDTO{}
 	}
 
-	sortedNodes := append([]*pluginmodel.OrgNode(nil), nodes...)
-	sort.SliceStable(sortedNodes, func(i, j int) bool {
-		if sortedNodes[i].Depth != sortedNodes[j].Depth {
-			return sortedNodes[i].Depth < sortedNodes[j].Depth
+	sort.SliceStable(nodes, func(i, j int) bool {
+		if nodes[i].Depth != nodes[j].Depth {
+			return nodes[i].Depth < nodes[j].Depth
 		}
-		if sortedNodes[i].SortOrder != sortedNodes[j].SortOrder {
-			return sortedNodes[i].SortOrder < sortedNodes[j].SortOrder
+		if nodes[i].SortOrder != nodes[j].SortOrder {
+			return nodes[i].SortOrder < nodes[j].SortOrder
 		}
-		if sortedNodes[i].Path != sortedNodes[j].Path {
-			return sortedNodes[i].Path < sortedNodes[j].Path
+		if nodes[i].Path != nodes[j].Path {
+			return nodes[i].Path < nodes[j].Path
 		}
-		return sortedNodes[i].Name < sortedNodes[j].Name
+		return nodes[i].Name < nodes[j].Name
 	})
 
-	nodesByID := make(map[string]*pluginmodel.OrgNode, len(sortedNodes))
-	for _, node := range sortedNodes {
-		nodesByID[node.ID] = node
+	poolByID := make(map[string]*pluginmodel.OrgNode, len(pool))
+	for _, node := range pool {
+		poolByID[node.ID] = node
 	}
 
 	parentExternalIDByParentID := map[string]string{}
-	unresolvedParentIDs := map[string]struct{}{}
-	for _, node := range sortedNodes {
+	var unresolvedParentIDs map[string]struct{}
+	for _, node := range nodes {
 		if node.ParentID == "" {
 			continue
 		}
@@ -487,11 +499,14 @@ func (p *Plugin) buildSyncNodeDTOs(nodes []*pluginmodel.OrgNode) []*pluginmodel.
 			continue
 		}
 
-		if parentNode, ok := nodesByID[node.ParentID]; ok {
+		if parentNode, ok := poolByID[node.ParentID]; ok {
 			parentExternalIDByParentID[node.ParentID] = parentNode.ExternalID
 			continue
 		}
 
+		if unresolvedParentIDs == nil {
+			unresolvedParentIDs = map[string]struct{}{}
+		}
 		unresolvedParentIDs[node.ParentID] = struct{}{}
 	}
 
@@ -503,8 +518,8 @@ func (p *Plugin) buildSyncNodeDTOs(nodes []*pluginmodel.OrgNode) []*pluginmodel.
 		parentExternalIDByParentID[parentID] = parentNode.ExternalID
 	}
 
-	result := make([]*pluginmodel.SyncNodeDTO, 0, len(sortedNodes))
-	for _, node := range sortedNodes {
+	result := make([]*pluginmodel.SyncNodeDTO, 0, len(nodes))
+	for _, node := range nodes {
 		dto := &pluginmodel.SyncNodeDTO{OrgNode: node}
 		if node.ParentID != "" {
 			dto.ParentExternalID = parentExternalIDByParentID[node.ParentID]
