@@ -42,6 +42,9 @@ func (p *Plugin) initializeAPI() {
 	// --- Static assets ---
 	p.router.HandleFunc("/icon", p.handleIcon).Methods(http.MethodGet)
 
+	// --- Public config (no auth) — exposes only fields safe for any client ---
+	p.router.HandleFunc("/api/v1/config/public", p.handlePublicConfig).Methods(http.MethodGet)
+
 	// --- Session-auth API — registered AFTER sync (broader prefix) ---
 	api := p.router.PathPrefix("/api/v1").Subrouter()
 
@@ -83,6 +86,15 @@ func (p *Plugin) initializeAPI() {
 	// 404 fallback
 	p.router.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
+	})
+}
+
+// handlePublicConfig returns plugin config fields that the webapp needs at
+// init time. Only whitelist fields here — never include secrets like SyncAPIToken.
+func (p *Plugin) handlePublicConfig(w http.ResponseWriter, _ *http.Request) {
+	cfg := p.getConfiguration()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"showAppBarEntry": cfg.ShowAppBarEntry,
 	})
 }
 

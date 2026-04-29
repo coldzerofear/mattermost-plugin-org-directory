@@ -16,8 +16,36 @@ function extractPluginState(storeState: any): OrgDirectoryState | null {
     return storeState?.['plugins-' + pluginId] ?? null;
 }
 
+type PublicConfig = {
+    showAppBarEntry?: boolean;
+};
+
+// Fetch plugin's public config. Falls back to showing the entry on any error
+// so a transient network blip can't make the plugin look broken.
+async function fetchPublicConfig(): Promise<PublicConfig> {
+    try {
+        const res = await fetch(`/plugins/${pluginId}/api/v1/config/public`, {
+            credentials: 'same-origin',
+            headers: {'X-Requested-With': 'XMLHttpRequest'},
+        });
+        if (!res.ok) {
+            return {};
+        }
+        return await res.json();
+    } catch {
+        return {};
+    }
+}
+
 export default class OrgDirectoryPlugin {
-    initialize(registry: any, store: any) {
+    async initialize(registry: any, store: any) {
+        const publicConfig = await fetchPublicConfig();
+        if (publicConfig.showAppBarEntry === false) {
+            // Entry hidden by admin: skip all UI registration. Plugin REST API
+            // remains usable for external integrations.
+            return;
+        }
+
         // Register Redux reducer
         registry.registerReducer(reducer);
 

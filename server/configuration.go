@@ -11,6 +11,7 @@ import (
 // configuration, as well as values computed from the configuration. Any public fields will be
 // deserialized from the Mattermost server configuration in OnConfigurationChange.
 type configuration struct {
+	ShowAppBarEntry        bool   `json:"ShowAppBarEntry"`
 	EnableAuditLog         bool   `json:"EnableAuditLog"`
 	AllowUserSearch        bool   `json:"AllowUserSearch"`
 	MaxTreeDepth           string `json:"MaxTreeDepth"`
@@ -93,6 +94,7 @@ func (p *Plugin) OnConfigurationChange() error {
 // setDefaultsIfEmpty fills in default values for empty configuration fields.
 func (c *configuration) setDefaultsIfEmpty() {
 	if reflect.DeepEqual(c, &configuration{}) {
+		c.ShowAppBarEntry = true
 		c.EnableAuditLog = true
 		c.AllowUserSearch = true
 		c.MaxTreeDepth = "10"

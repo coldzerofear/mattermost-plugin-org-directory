@@ -24,6 +24,13 @@
         "footer": "",
         "settings": [
             {
+                "key": "ShowAppBarEntry",
+                "display_name": "在侧边栏显示通讯录入口图标:",
+                "type": "bool",
+                "help_text": "关闭后，Mattermost 侧边栏不再显示通讯录图标和右侧面板，但插件 REST 接口仍可调用。修改后需要刷新页面生效。",
+                "default": true
+            },
+            {
                 "key": "EnableAuditLog",
                 "display_name": "启用操作审计日志:",
                 "type": "bool",
