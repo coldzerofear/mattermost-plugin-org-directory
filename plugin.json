@@ -24,6 +24,13 @@
         "footer": "",
         "settings": [
             {
+                "key": "EnableSyncTimingLogs",
+                "display_name": "记录 /sync/nodes 性能分段日志:",
+                "type": "bool",
+                "help_text": "诊断用。开启后每次 GET /api/v1/sync/nodes 都会写一行 INFO 日志，包含 db_ms/filter_ms/dto_ms/encode_ms/total_ms/resp_bytes，帮助定位耗时。生产排障完成后建议关闭。",
+                "default": false
+            },
+            {
                 "key": "ShowAppBarEntry",
                 "display_name": "在侧边栏显示通讯录入口图标:",
                 "type": "bool",

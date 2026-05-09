@@ -12,6 +12,7 @@ import (
 // deserialized from the Mattermost server configuration in OnConfigurationChange.
 type configuration struct {
 	ShowAppBarEntry        bool   `json:"ShowAppBarEntry"`
+	EnableSyncTimingLogs   bool   `json:"EnableSyncTimingLogs"`
 	EnableAuditLog         bool   `json:"EnableAuditLog"`
 	AllowUserSearch        bool   `json:"AllowUserSearch"`
 	MaxTreeDepth           string `json:"MaxTreeDepth"`

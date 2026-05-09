@@ -7,12 +7,26 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	mmmodel "github.com/mattermost/mattermost/server/public/model"
 
 	pluginmodel "github.com/your-org/mattermost-plugin-org-directory/server/model"
 )
+
+// countingResponseWriter wraps http.ResponseWriter to count bytes written.
+// Used by handleListSyncNodes to measure response payload size for perf logs.
+type countingResponseWriter struct {
+	http.ResponseWriter
+	bytes int
+}
+
+func (c *countingResponseWriter) Write(b []byte) (int, error) {
+	n, err := c.ResponseWriter.Write(b)
+	c.bytes += n
+	return n, err
+}
 
 // handleSyncData handles POST /api/v1/sync — full or incremental sync of nodes+members.
 func (p *Plugin) handleSyncData(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +177,15 @@ func (p *Plugin) handleGetSyncLog(w http.ResponseWriter, r *http.Request) {
 
 // handleListSyncNodes handles GET /api/v1/sync/nodes.
 func (p *Plugin) handleListSyncNodes(w http.ResponseWriter, r *http.Request) {
+	timingEnabled := p.getConfiguration().EnableSyncTimingLogs
+	var tStart time.Time
+	var cw *countingResponseWriter
+	if timingEnabled {
+		tStart = time.Now()
+		cw = &countingResponseWriter{ResponseWriter: w}
+		w = cw
+	}
+
 	source := strings.TrimSpace(r.URL.Query().Get("source"))
 	if source == "" {
 		writeError(w, http.StatusBadRequest, "source is required")
@@ -195,10 +218,18 @@ func (p *Plugin) handleListSyncNodes(w http.ResponseWriter, r *http.Request) {
 
 	parentExternalID := strings.TrimSpace(r.URL.Query().Get("parent_external_id"))
 
+	var tDBStart time.Time
+	if timingEnabled {
+		tDBStart = time.Now()
+	}
 	nodes, err := p.store.GetNodesBySource(source)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get nodes")
 		return
+	}
+	var dbMs int64
+	if timingEnabled {
+		dbMs = time.Since(tDBStart).Milliseconds()
 	}
 
 	filteredNodes := make([]*pluginmodel.OrgNode, 0, len(nodes))
@@ -210,6 +241,10 @@ func (p *Plugin) handleListSyncNodes(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "parent node not found")
 			return
 		}
+	}
+	var tFilterStart time.Time
+	if timingEnabled {
+		tFilterStart = time.Now()
 	}
 
 	for _, node := range nodes {
@@ -244,14 +279,46 @@ func (p *Plugin) handleListSyncNodes(w http.ResponseWriter, r *http.Request) {
 		filteredNodes = append(filteredNodes, node)
 	}
 
+	var filterMs, dtoMs, encodeMs int64
+	if timingEnabled {
+		filterMs = time.Since(tFilterStart).Milliseconds()
+	}
+
 	// Pass the full unfiltered `nodes` set as the parent-resolution pool so that
 	// parents excluded by depth/parent_external_id filters are still resolved
 	// in memory — avoids per-parent GetNode calls in buildSyncNodeDTOs.
+	var tDTOStart time.Time
+	if timingEnabled {
+		tDTOStart = time.Now()
+	}
 	responseNodes := p.buildSyncNodeDTOsWithPool(filteredNodes, nodes)
+	if timingEnabled {
+		dtoMs = time.Since(tDTOStart).Milliseconds()
+	}
+
+	var tEncodeStart time.Time
+	if timingEnabled {
+		tEncodeStart = time.Now()
+	}
 	writeJSON(w, http.StatusOK, &pluginmodel.SyncNodeListResponse{
 		Source: source,
 		Nodes:  responseNodes,
 	})
+	if timingEnabled {
+		encodeMs = time.Since(tEncodeStart).Milliseconds()
+		p.API.LogInfo("sync nodes timing",
+			"source", source,
+			"total", len(nodes),
+			"returned", len(responseNodes),
+			"db_ms", dbMs,
+			"filter_ms", filterMs,
+			"dto_ms", dtoMs,
+			"encode_ms", encodeMs,
+			"total_ms", time.Since(tStart).Milliseconds(),
+			"resp_bytes", cw.bytes,
+			"accept_encoding", r.Header.Get("Accept-Encoding"),
+		)
+	}
 }
 
 // handleGetSyncNode handles GET /api/v1/sync/nodes/{externalID}.
